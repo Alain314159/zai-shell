@@ -1,0 +1,41 @@
+{
+  "name": "zai-shell",
+  "version": "1.0.0",
+  "description": "Native Android shell for chat.z.ai - anti-freeze, foreground service, DOM cleanup, wake lock, and more",
+  "author": "Alain314159",
+  "license": "MIT",
+  "homepage": "https://github.com/Alain314159/zai-shell",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Alain314159/zai-shell.git"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "cap:sync": "npm run build && npx cap sync android",
+    "cap:open": "npx cap open android",
+    "cap:run": "npm run build && npx cap sync android && npx cap run android",
+    "apk:debug": "npm run build && npx cap sync android && cd android && ./gradlew assembleDebug",
+    "apk:release": "npm run build && npx cap sync android && cd android && ./gradlew assembleRelease"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.5.3",
+    "@capacitor/app": "^8.1.2",
+    "@capacitor/core": "^8.5.3",
+    "@capacitor/filesystem": "^8.1.4",
+    "@capacitor/haptics": "^8.0.2",
+    "@capacitor/keyboard": "^8.0.6",
+    "@capacitor/local-notifications": "^8.3.1",
+    "@capacitor/network": "^8.0.1",
+    "@capacitor/preferences": "^8.0.1",
+    "@capacitor/splash-screen": "^8.0.2",
+    "@capacitor/status-bar": "^8.0.4",
+    "@capacitor-community/keep-awake": "^8.0.1"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.5.3",
+    "typescript": "^5.6.0",
+    "vite": "^5.4.0"
+  }
+}

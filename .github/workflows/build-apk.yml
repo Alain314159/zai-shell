@@ -1,0 +1,150 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+env:
+  NODE_VERSION: '20'
+  JAVA_VERSION: '17'
+  JAVA_DISTRIBUTION: 'temurin'
+
+jobs:
+  build:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build web assets
+        run: npm run build
+
+      - name: Sync Capacitor
+        run: npx cap sync android
+
+      - name: Build debug APK
+        working-directory: android
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Build release APK (unsigned)
+        working-directory: android
+        run: ./gradlew assembleRelease --no-daemon --stacktrace
+        continue-on-error: true
+
+      - name: Generate signing key
+        if: github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main')
+        run: |
+          if [ -n "${{ secrets.SIGNING_KEY_BASE64 }}" ]; then
+            echo "Using provided signing key"
+            echo "${{ secrets.SIGNING_KEY_BASE64 }}" | base64 -d > android/app/release.keystore
+          else
+            echo "Generating debug signing key for release APK"
+            keytool -genkey -v -keystore android/app/release.keystore \
+              -alias zai-shell -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass zai-shell-pass -keypass zai-shell-pass \
+              -dname "CN=ZaiShell, OU=Dev, O=Alain314159, L=Havana, ST=Havana, C=CU"
+          fi
+
+      - name: Sign release APK
+        if: github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main')
+        working-directory: android
+        run: |
+          # Copiar APK unsigned a temporal
+          cp app/build/outputs/apk/release/app-release-unsigned.apk app-release.apk || true
+
+          # Si existe release.keystore, firmar
+          if [ -f app/release.keystore ]; then
+            APKSIGNER=$(find $ANDROID_HOME -name apksigner 2>/dev/null | head -1)
+            if [ -z "$APKSIGNER" ]; then
+              APKSIGNER=$(find ~ -name apksigner 2>/dev/null | head -1)
+            fi
+
+            STORE_PASS="${{ secrets.SIGNING_STORE_PASSWORD }}"
+            if [ -z "$STORE_PASS" ]; then STORE_PASS="zai-shell-pass"; fi
+
+            KEY_PASS="${{ secrets.SIGNING_KEY_PASSWORD }}"
+            if [ -z "$KEY_PASS" ]; then KEY_PASS="zai-shell-pass"; fi
+
+            KEY_ALIAS="${{ secrets.SIGNING_KEY_ALIAS }}"
+            if [ -z "$KEY_ALIAS" ]; then KEY_ALIAS="zai-shell"; fi
+
+            $APKSIGNER sign --ks app/release.keystore --ks-pass pass:$STORE_PASS \
+              --ks-key-alias $KEY_ALIAS --key-pass pass:$KEY_PASS \
+              --out app-release-signed.apk app-release.apk
+
+            echo "APK signed successfully"
+          else
+            echo "No keystore found, using unsigned APK"
+            cp app-release.apk app-release-signed.apk
+          fi
+        continue-on-error: true
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: zai-shell-debug
+          path: android/app/build/outputs/apk/debug/*.apk
+          retention-days: 30
+
+      - name: Upload release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: zai-shell-release
+          path: |
+            android/app-release-signed.apk
+            android/app/build/outputs/apk/release/*.apk
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            android/app-release-signed.apk
+            android/app/build/outputs/apk/debug/*.apk
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Status: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Branch/Tag: ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Commit: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "- Debug APK: download \`zai-shell-debug\` artifact" >> $GITHUB_STEP_SUMMARY
+          echo "- Release APK: download \`zai-shell-release\` artifact" >> $GITHUB_STEP_SUMMARY

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">z.ai</domain>
+        <domain includeSubdomains="true">chat.z.ai</domain>
+        <domain includeSubdomains="true">bigmodel.cn</domain>
+        <domain includeSubdomains="true">zhipuai.cn</domain>
+    </domain-config>
+</network-security-config>

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Z.ai Shell</string>
+    <string name="title_activity_main">Z.ai Shell</string>
+    <string name="style_string">default</string>
+    <string name="custom_url" translatable="false">https://chat.z.ai</string>
+    <string name="scheme_string" translatable="false">https</string>
+    <string name="hostname_string" translatable="false">chat.z.ai</string>
+    <string name="server_native_string" translatable="false">Server.NATIVE</string>
+    <string name="package_name" translatable="false">com.zai.shell</string>
+    <string name="custom_server" translatable="false">false</string>
+    <string name="default_asset_path" translatable="false">public</string>
+</resources>
