@@ -5,7 +5,6 @@ import android.os.Bundle
 import android.util.Log
 import android.webkit.WebView
 import com.getcapacitor.BridgeActivity
-import com.getcapacitor.BridgeFragment
 import com.zai.shell.plugin.ZaiForegroundService
 import com.zai.shell.plugin.ZaiShellPlugin
 import com.zai.shell.plugin.ZaiWebViewClient
