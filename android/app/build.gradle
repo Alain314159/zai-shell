@@ -64,6 +64,7 @@ dependencies {
     implementation project(':capacitor-network')
     implementation project(':capacitor-preferences')
     implementation project(':capacitor-status-bar')
+    implementation project(':capacitor-splash-screen')
     implementation project(':capacitor-filesystem')
     implementation "androidx.core:core:1.13.1"
     implementation "androidx.constraintlayout:constraintlayout:2.1.4"
