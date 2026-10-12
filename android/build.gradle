@@ -10,8 +10,6 @@ buildscript {
     }
 }
 
-apply from: "capacitor.settings.gradle"
-
 allprojects {
     repositories {
         google()
