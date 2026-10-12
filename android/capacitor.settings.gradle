@@ -1,0 +1,23 @@
+// AUTO-GENERED by `npx cap sync` - do not edit manually
+include ':capacitor-android'
+project(':capacitor-android').projectDir = new File('../node_modules/@capacitor/android/capacitor')
+include ':capacitor-app'
+project(':capacitor-app').projectDir = new File('../node_modules/@capacitor/android/capacitor-app')
+include ':capacitor-haptics'
+project(':capacitor-haptics').projectDir = new File('../node_modules/@capacitor/android/capacitor-haptics')
+include ':capacitor-keyboard'
+project(':capacitor-keyboard').projectDir = new File('../node_modules/@capacitor/android/capacitor-keyboard')
+include ':capacitor-local-notifications'
+project(':capacitor-local-notifications').projectDir = new File('../node_modules/@capacitor/android/capacitor-local-notifications')
+include ':capacitor-network'
+project(':capacitor-network').projectDir = new File('../node_modules/@capacitor/android/capacitor-network')
+include ':capacitor-preferences'
+project(':capacitor-preferences').projectDir = new File('../node_modules/@capacitor/android/capacitor-preferences')
+include ':capacitor-status-bar'
+project(':capacitor-status-bar').projectDir = new File('../node_modules/@capacitor/android/capacitor-status-bar')
+include ':capacitor-splash-screen'
+project(':capacitor-splash-screen').projectDir = new File('../node_modules/@capacitor/android/capacitor-splash-screen')
+include ':capacitor-filesystem'
+project(':capacitor-filesystem').projectDir = new File('../node_modules/@capacitor/android/capacitor-filesystem')
+include ':capacitor-community-keep-awake'
+project(':capacitor-community-keep-awake').projectDir = new File('../node_modules/@capacitor-community/keep-awake/android')
