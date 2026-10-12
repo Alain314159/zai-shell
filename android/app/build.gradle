@@ -1,21 +1,5 @@
-buildscript {
-    repositories {
-        google()
-        mavenCentral()
-    }
-    dependencies {
-        classpath 'com.android.tools.build:gradle:8.7.2'
-        classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:2.0.21'
-    }
-}
-
 apply plugin: 'com.android.application'
 apply plugin: 'kotlin-android'
-
-def capConfig = project.ext.get("capacitor")
-if (capConfig == null) {
-    capConfig = [:]
-}
 
 android {
     namespace "com.zai.shell"
