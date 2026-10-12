@@ -3,12 +3,12 @@ apply plugin: 'kotlin-android'
 
 android {
     namespace "com.zai.shell"
-    compileSdk 35
+    compileSdk 36
 
     defaultConfig {
         applicationId "com.zai.shell"
         minSdk 23
-        targetSdk 35
+        targetSdk 36
         versionCode 1
         versionName "1.0.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
