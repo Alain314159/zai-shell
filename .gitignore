@@ -38,7 +38,7 @@ android/app/src/main/assets/public/
 !android/app/src/main/assets/capacitor.config.json
 android/capacitor-cordova-android-plugins/
 
-# Generated
-android/gradlew
-android/gradlew.bat
-android/gradle/wrapper/gradle-wrapper.jar
+# Generated (but keep gradlew and gradle-wrapper.jar - needed for CI)
+# android/gradlew
+# android/gradlew.bat
+# android/gradle/wrapper/gradle-wrapper.jar

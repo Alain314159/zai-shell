@@ -48,6 +48,13 @@ jobs:
       - name: Sync Capacitor
         run: npx cap sync android
 
+      - name: Ensure gradlew is executable
+        working-directory: android
+        run: |
+          ls -la gradlew || echo "gradlew not found"
+          chmod +x gradlew
+          ls -la gradle/wrapper/gradle-wrapper.jar
+
       - name: Build debug APK
         working-directory: android
         run: ./gradlew assembleDebug --no-daemon --stacktrace
