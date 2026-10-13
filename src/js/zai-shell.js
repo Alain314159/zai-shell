@@ -158,6 +158,74 @@
       background: #000 !important;
     }
 
+    /* MODO SOLO CONVERSACION - oculta todo menos el chat */
+    body.zai-shell-focus [class*="sidebar"]:not(:has(textarea)):not(:has([class*="chat-input"])),
+    body.zai-shell-focus [class*="Sidebar"]:not(:has(textarea)):not(:has([class*="chat-input"])),
+    body.zai-shell-focus nav:not(:has(textarea)):not(:has([class*="chat-input"])),
+    body.zai-shell-focus [class*="header"]:not(:has(textarea)):not(:has([class*="chat-input"])),
+    body.zai-shell-focus [class*="Header"]:not(:has(textarea)):not(:has([class*="chat-input"])),
+    body.zai-shell-focus [class*="top-bar"]:not(:has(textarea)):not(:has([class*="chat-input"])),
+    body.zai-shell-focus [class*="topbar"]:not(:has(textarea)):not(:has([class*="chat-input"])),
+    body.zai-shell-focus [class*="toolbar"]:not(:has(textarea)):not(:has([class*="chat-input"])),
+    body.zai-shell-focus [class*="menu-button"]:not(:has(textarea)):not(:has([class*="chat-input"])),
+    body.zai-shell-focus [class*="hamburger"]:not(:has(textarea)):not(:has([class*="chat-input"])) {
+      display: none !important;
+      width: 0 !important;
+      height: 0 !important;
+      max-width: 0 !important;
+      max-height: 0 !important;
+      overflow: hidden !important;
+      position: absolute !important;
+      left: -9999px !important;
+    }
+
+    /* En modo focus, el contenido principal ocupa toda la pantalla */
+    body.zai-shell-focus [class*="main"]:not(:has(textarea)) {
+      width: 100vw !important;
+      max-width: 100vw !important;
+      margin: 0 !important;
+      padding: 0 !important;
+    }
+
+    /* Ocultar banner/promo/disclaimer en modo focus */
+    body.zai-shell-focus [class*="footer"]:not(:has(textarea)),
+    body.zai-shell-focus [class*="disclaimer"]:not(:has(textarea)),
+    body.zai-shell-focus [class*="upgrade"]:not(:has(textarea)),
+    body.zai-shell-focus [class*="promo"]:not(:has(textarea)) {
+      display: none !important;
+    }
+
+    /* PULL-TO-REFRESH indicator */
+    #zai-shell-pull-indicator {
+      position: fixed;
+      top: -60px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 44px;
+      height: 44px;
+      border-radius: 22px;
+      background: rgba(59, 130, 246, 0.95);
+      color: white;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 4px 12px rgba(0,0,0,.5);
+      z-index: 999997;
+      transition: top 0.2s ease, transform 0.2s ease;
+      pointer-events: none;
+      font-size: 20px;
+    }
+    #zai-shell-pull-indicator.visible {
+      top: 12px;
+    }
+    #zai-shell-pull-indicator.refreshing {
+      animation: zai-spin 0.8s linear infinite;
+    }
+    @keyframes zai-spin {
+      from { transform: translateX(-50%) rotate(0deg); }
+      to { transform: translateX(-50%) rotate(360deg); }
+    }
+
     /* Boton flotante para abrir ajustes de ZaiShell */
     #zai-shell-fab {
       position: fixed;
@@ -433,6 +501,10 @@
         <span>Guardar chat actual</span>
         <button id="zai-btn-save">Guardar</button>
       </div>
+      <div class="row">
+        <span>Modo Solo Conversación</span>
+        <button id="zai-btn-focus">On/Off</button>
+      </div>
     `;
 
     document.body.appendChild(fab);
@@ -514,6 +586,17 @@
     // Historial offline
     document.getElementById('zai-btn-history').addEventListener('click', showHistory);
     document.getElementById('zai-btn-save').addEventListener('click', saveCurrentConversation);
+
+    // Modo Solo Conversacion
+    document.getElementById('zai-btn-focus').addEventListener('click', toggleFocusMode);
+    // Restaurar estado focus guardado
+    try {
+      if (localStorage.getItem('zai-shell-focus') === '1') {
+        document.body.classList.add('zai-shell-focus');
+        const btn = document.getElementById('zai-btn-focus');
+        if (btn) { btn.textContent = 'ON'; btn.classList.add('danger'); }
+      }
+    } catch (e) {}
 
     function updateStats() {
       const m = document.getElementById('zai-stat-msgs');
@@ -1124,6 +1207,209 @@
   }
 
   // ====================================================================
+  // 16. FOCUS MODE - oculta todo menos el chat
+  // ====================================================================
+  function toggleFocusMode() {
+    document.body.classList.toggle('zai-shell-focus');
+    const isOn = document.body.classList.contains('zai-shell-focus');
+    try { localStorage.setItem('zai-shell-focus', isOn ? '1' : '0'); } catch (e) {}
+    const btn = document.getElementById('zai-btn-focus');
+    if (btn) {
+      btn.textContent = isOn ? 'ON' : 'On/Off';
+      btn.classList.toggle('danger', isOn);
+    }
+    toast(isOn ? 'Modo Solo Conversación activado' : 'Modo normal');
+  }
+
+  // ====================================================================
+  // 17. PULL-TO-REFRESH - deslizar abajo estando arriba = recargar
+  // ====================================================================
+  function setupPullToRefresh() {
+    let startY = 0;
+    let pulling = false;
+    let currentDelta = 0;
+    const THRESHOLD = 80; // pixels necesarios para trigger
+    let indicator = null;
+    let refreshing = false;
+
+    function getIndicator() {
+      if (!indicator) {
+        indicator = document.createElement('div');
+        indicator.id = 'zai-shell-pull-indicator';
+        indicator.textContent = '⟳';
+        document.body.appendChild(indicator);
+      }
+      return indicator;
+    }
+
+    function isAtTop() {
+      // Multiple elements pueden ser el scroll container en z.ai
+      const scrollRoots = [
+        document.documentElement,
+        document.body,
+        document.querySelector('[class*="main"]'),
+        document.querySelector('[class*="chat"]'),
+        document.querySelector('[class*="conversation"]'),
+      ].filter(Boolean);
+      for (const el of scrollRoots) {
+        if (el.scrollTop > 5) return false;
+      }
+      return true;
+    }
+
+    function onTouchStart(e) {
+      if (refreshing) return;
+      if (!isAtTop()) return;
+      // Solo iniciar pull con un dedo
+      if (e.touches.length !== 1) return;
+      startY = e.touches[0].clientY;
+      pulling = true;
+      currentDelta = 0;
+    }
+
+    function onTouchMove(e) {
+      if (!pulling || refreshing) return;
+      const delta = e.touches[0].clientY - startY;
+      if (delta <= 0) {
+        // Scrolleando arriba, no es pull
+        currentDelta = 0;
+        getIndicator().classList.remove('visible');
+        return;
+      }
+      currentDelta = delta;
+      // Mostrar indicador proporcional
+      const ind = getIndicator();
+      if (delta > 10) {
+        ind.classList.add('visible');
+        const progress = Math.min(1, delta / THRESHOLD);
+        ind.style.opacity = String(0.5 + progress * 0.5);
+        ind.style.transform = `translateX(-50%) rotate(${progress * 360}deg)`;
+      } else {
+        ind.classList.remove('visible');
+      }
+      // Prevenir bounce nativo cuando estamos haciendo pull
+      if (delta > 10) e.preventDefault();
+    }
+
+    function onTouchEnd(e) {
+      if (!pulling) return;
+      pulling = false;
+      const ind = getIndicator();
+      if (currentDelta >= THRESHOLD) {
+        // Trigger refresh
+        refreshing = true;
+        ind.classList.add('refreshing');
+        ind.style.opacity = '1';
+        ind.style.transform = 'translateX(-50%)';
+        log('Pull-to-refresh triggered');
+        // Recargar
+        setTimeout(() => {
+          location.reload();
+        }, 300);
+      } else {
+        // Cancelar
+        ind.classList.remove('visible');
+        ind.style.transform = 'translateX(-50%)';
+      }
+      currentDelta = 0;
+    }
+
+    document.addEventListener('touchstart', onTouchStart, { passive: true });
+    document.addEventListener('touchmove', onTouchMove, { passive: false });
+    document.addEventListener('touchend', onTouchEnd, { passive: true });
+    document.addEventListener('touchcancel', onTouchEnd, { passive: true });
+    log('Pull-to-refresh installed');
+  }
+
+  // ====================================================================
+  // 18. OUTGOING PERSISTENCE - guarda el texto que escribes mientras
+  // se envia o si la app se cierra, para que no se pierda
+  // ====================================================================
+  let pendingOutgoing = null;
+
+  function setupOutgoingPersistence() {
+    // 1. Auto-guardar el texto del textarea cada 1s
+    setInterval(() => {
+      const ta = document.querySelector('textarea#chat-input, textarea[placeholder*="Message" i], textarea[placeholder*="Send" i], textarea');
+      if (!ta) return;
+      const text = ta.value || '';
+      try {
+        if (text.trim()) {
+          localStorage.setItem('zai-shell-draft', text);
+        } else {
+          localStorage.removeItem('zai-shell-draft');
+        }
+      } catch (e) {}
+    }, 1000);
+
+    // 2. Al cargar, restaurar draft
+    setTimeout(() => {
+      try {
+        const draft = localStorage.getItem('zai-shell-draft');
+        if (draft) {
+          const ta = document.querySelector('textarea#chat-input, textarea[placeholder*="Message" i], textarea[placeholder*="Send" i], textarea');
+          if (ta && !ta.value) {
+            const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+            setter.call(ta, draft);
+            ta.dispatchEvent(new Event('input', { bubbles: true }));
+            log('Draft restored: ' + draft.length + ' chars');
+          }
+        }
+      } catch (e) {}
+    }, 2000);
+
+    // 3. Interceptar el envio para guardar el mensaje en historial "pending"
+    // y limpiar el draft solo cuando el mensaje aparece en el DOM
+    const sendBtn = document.querySelector('button[type="submit"], div[role="button"][aria-label*="Send" i] button, div[role="button"][aria-label*="Send" i]');
+    // No podemos pegar al click del boton porque z.ai lo recrea
+    // En vez, observamos cuando el textarea se vacia = se envio
+    const observer = new MutationObserver(() => {
+      const ta = document.querySelector('textarea#chat-input, textarea[placeholder*="Message" i], textarea[placeholder*="Send" i], textarea');
+      if (!ta) return;
+      // Si el textarea esta vacio pero habia draft, se envio
+      if (!ta.value && localStorage.getItem('zai-shell-draft')) {
+        const sent = localStorage.getItem('zai-shell-draft');
+        localStorage.removeItem('zai-shell-draft');
+        // Guardar como pending outgoing (se confirma cuando aparece en el DOM)
+        pendingOutgoing = {
+          text: sent,
+          timestamp: Date.now(),
+          confirmed: false
+        };
+        log('Outgoing message tracked: ' + sent.length + ' chars');
+        // Verificar confirmacion en 5s
+        setTimeout(() => confirmOutgoingMessage(), 5000);
+      }
+    });
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+
+    log('Outgoing persistence installed');
+  }
+
+  function confirmOutgoingMessage() {
+    if (!pendingOutgoing || pendingOutgoing.confirmed) return;
+    // Buscar si el mensaje ya aparece en el DOM
+    const userMsgs = findUserMessages();
+    for (const el of userMsgs) {
+      const text = (el.innerText || '').trim();
+      if (text && pendingOutgoing.text && text.includes(pendingOutgoing.text.slice(0, 30))) {
+        pendingOutgoing.confirmed = true;
+        log('Outgoing confirmed in DOM');
+        return;
+      }
+    }
+    // Si despues de 10s no aparece, marcar como "pendiente" en historial
+    if (Date.now() - pendingOutgoing.timestamp > 10000) {
+      log('Outgoing message not confirmed, marking as pending');
+      // Guardar en historial como conversacion fallida?
+      // Por ahora solo log
+      pendingOutgoing = null;
+    } else {
+      setTimeout(() => confirmOutgoingMessage(), 3000);
+    }
+  }
+
+  // ====================================================================
   // 15. NATIVE SSE BRIDGE - intercepta streams del WebView y los enruta
   // a una conexion SSE nativa en Kotlin que sobrevive al background
   // ====================================================================
@@ -1337,6 +1623,8 @@
     startKeyboardFix();
     startSessionBackup();
     installSseInterceptor();
+    setupPullToRefresh();
+    setupOutgoingPersistence();
     // Restaurar tamano de fuente guardado
     try {
       const saved = parseFloat(localStorage.getItem('zai-shell-fontscale') || '1');
