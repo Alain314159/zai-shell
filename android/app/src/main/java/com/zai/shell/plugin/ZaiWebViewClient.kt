@@ -21,9 +21,35 @@ class ZaiWebViewClient(private val bridge: Bridge) : WebViewClient() {
     companion object {
         private const val TAG = "ZaiWebViewClient"
         // Dominios permitidos - todo lo demas se abre en navegador externo
+        // Incluye dominios de auth OAuth para que el login funcione dentro del WebView
         private val ALLOWED_DOMAINS = listOf(
-            "z.ai", "chat.z.ai", "bigmodel.cn", "zhipuai.cn", "zhipuai.cn",
-            "localhost", "127.0.0.1"
+            // z.ai / Zhipu
+            "z.ai", "chat.z.ai", "bigmodel.cn", "zhipuai.cn", "chatglm.cn",
+            "localhost", "127.0.0.1",
+            // OAuth providers que z.ai puede usar para login
+            "accounts.google.com", "google.com", "www.google.com",
+            "github.com", "oauth.github.com",
+            "login.microsoftonline.com", "login.live.com", "login.microsoft.com",
+            "appleid.apple.com",
+            "twitter.com", "api.twitter.com",
+            "facebook.com", "www.facebook.com",
+            // CDNs y assets que z.ai usa
+            "artifacts-cdn.chatglm.site",
+            "zcode.z.ai",
+            "chatglm.site",
+            // Auth callbacks comunes
+            "auth.openai.com",  // por si acaso
+            "auth0.com"
+        )
+        // Patrones adicionales de URLs de auth (regex)
+        private val AUTH_URL_PATTERNS = listOf(
+            Regex("(?i).*oauth.*"),
+            Regex("(?i).*accounts\\..*"),
+            Regex("(?i).*login.*"),
+            Regex("(?i).*signin.*"),
+            Regex("(?i).*auth.*"),
+            Regex("(?i).*callback.*"),
+            Regex("(?i).*redirect.*")
         )
         // Patrones de URLs bloqueadas (telemetry/analytics/tracking)
         // Reduces bandwidth + improves privacy
@@ -126,31 +152,43 @@ class ZaiWebViewClient(private val bridge: Bridge) : WebViewClient() {
 
     /**
      * Intercepta URLs antes de cargarlas.
-     * - URLs internas (z.ai, etc): se cargan en el WebView
-     * - URLs externas: se abren en el navegador del sistema
-     * - URLs con extension de archivo (.pdf, .doc, etc): se descargan
+     *
+     * Logica (menos agresiva para no romper auth):
+     *  - data:, blob:, about: dejar pasar
+     *  - Archivos descargables (.pdf, .doc, etc) -> DownloadManager
+     *  - Dominios en ALLOWED_DOMAINS (z.ai, OAuth providers) -> WebView
+     *  - URLs que parecen auth (oauth, login, callback) -> WebView
+     *  - Todo lo demas -> tambien WebView (preferimos no abrir Chrome)
+     *    A menos que sea un scheme distinto de http/https (mailto:, tel:, etc)
      */
     override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
         url ?: return false
         Log.i(TAG, "shouldOverrideUrlLoading: $url")
 
-        // Si es data: o blob: dejar que cargue
-        if (url.startsWith("data:") || url.startsWith("blob:")) {
+        // data:, blob:, about: dejar pasar
+        if (url.startsWith("data:") || url.startsWith("blob:") || url.startsWith("about:")) {
             return false
         }
 
-        // Si es about:blank dejar pasar
-        if (url.startsWith("about:")) {
-            return false
+        // Schemes especiales (mailto, tel, sms, intent) -> abrir en app externa
+        if (!url.startsWith("http://") && !url.startsWith("https://")) {
+            Log.i(TAG, "Scheme especial, abriendo en app externa: $url")
+            val uri = Uri.parse(url)
+            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, uri)
+            intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            try {
+                bridge.context.startActivity(intent)
+            } catch (e: Exception) {
+                Log.e(TAG, "No se pudo abrir scheme especial: ${e.message}")
+            }
+            return true
         }
 
-        // Verificar si es un dominio permitido
         val uri = Uri.parse(url)
         val host = uri.host ?: return false
-        val isAllowed = ALLOWED_DOMAINS.any { host == it || host.endsWith(".$it") }
-
-        // Si es archivo descargable (.pdf, .doc, .xls, .ppt, .zip, etc.) -> DownloadManager
         val lastSegment = uri.lastPathSegment ?: ""
+
+        // Archivos descargables -> DownloadManager
         val downloadableExtensions = listOf(
             ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
             ".zip", ".rar", ".7z", ".tar", ".gz",
@@ -160,27 +198,30 @@ class ZaiWebViewClient(private val bridge: Bridge) : WebViewClient() {
             ".apk", ".exe", ".dmg"
         )
         val isDownloadable = downloadableExtensions.any { lastSegment.lowercase().endsWith(it) }
-
         if (isDownloadable) {
             Log.i(TAG, "Descarga detectada, mandando a DownloadManager: $url")
             startDownload(url)
-            return true // Bloquear que cargue en el WebView
-        }
-
-        if (!isAllowed) {
-            Log.i(TAG, "URL externa bloqueada, abriendo en navegador: $url")
-            // Abrir en el navegador del sistema
-            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, uri)
-            intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-            try {
-                bridge.context.startActivity(intent)
-            } catch (e: Exception) {
-                Log.e(TAG, "No se pudo abrir URL externa: ${e.message}")
-            }
             return true
         }
 
-        // URL permitida - dejar cargar en el WebView
+        // Verificar si es dominio permitido
+        val isAllowed = ALLOWED_DOMAINS.any { host == it || host.endsWith(".$it") }
+        if (isAllowed) {
+            Log.d(TAG, "URL permitida, cargando en WebView: $host")
+            return false
+        }
+
+        // Verificar si parece URL de auth (no bloquear estas)
+        val isAuthUrl = AUTH_URL_PATTERNS.any { it.matches(url) }
+        if (isAuthUrl) {
+            Log.i(TAG, "URL de auth detectada, cargando en WebView: $url")
+            return false
+        }
+
+        // Default: cargar en el WebView (comportamiento anterior rompia auth)
+        // Solo abrir en Chrome si explicitamente es un enlace externo clicado
+        // con scheme http/https y NO es auth y NO es z.ai
+        Log.d(TAG, "URL externa cargando en WebView (default): $host")
         return false
     }
 

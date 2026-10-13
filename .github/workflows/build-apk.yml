@@ -55,86 +55,95 @@ jobs:
           chmod +x gradlew
           ls -la gradle/wrapper/gradle-wrapper.jar
 
-      - name: Build debug APK
+      # =========================================================================
+      # Restaurar keystore permanente para firma consistente entre builds
+      # Esto permite actualizar la app sin desinstalar primero
+      # =========================================================================
+      - name: Restore permanent keystore
+        run: |
+          if [ -n "${{ secrets.RELEASE_KEYSTORE }}" ]; then
+            echo "Restaurando keystore permanente..."
+            echo "${{ secrets.RELEASE_KEYSTORE }}" | base64 -d > android/app/release.keystore
+            ls -la android/app/release.keystore
+            echo "KEYSTORE_AVAILABLE=true" >> $GITHUB_ENV
+          else
+            echo "WARNING: RELEASE_KEYSTORE no configurado - los builds no seran actualizables"
+            echo "KEYSTORE_AVAILABLE=false" >> $GITHUB_ENV
+          fi
+
+      # =========================================================================
+      # Configurar signingConfigs en build.gradle con el keystore permanente
+      # =========================================================================
+      - name: Configure signing in build.gradle
+        run: |
+          cat << 'EOF' >> android/app/build.gradle
+
+          // Configuracion de firma generada por CI
+          if (project.hasProperty('zaiSigningConfig')) {
+              android.signingConfigs {
+                  zaiRelease {
+                      storeFile file('release.keystore')
+                      storePassword project.ext.zaiStorePassword
+                      keyAlias project.ext.zaiKeyAlias
+                      keyPassword project.ext.zaiKeyPassword
+                  }
+              }
+              android.buildTypes.release.signingConfig android.signingConfigs.zaiRelease
+              android.buildTypes.debug.signingConfig android.signingConfigs.zaiRelease
+          }
+          EOF
+
+      - name: Build release APK (signed)
+        working-directory: android
+        env:
+          ZAI_STORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          ZAI_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          ZAI_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: |
+          ./gradlew assembleRelease assembleDebug \
+            -PzaiSigningConfig=true \
+            -PzaiStorePassword="$ZAI_STORE_PASSWORD" \
+            -PzaiKeyAlias="$ZAI_KEY_ALIAS" \
+            -PzaiKeyPassword="$ZAI_KEY_PASSWORD" \
+            --no-daemon --stacktrace
+
+      # Si no hay keystore, fallback al debug normal
+      - name: Build debug APK (fallback)
+        if: env.KEYSTORE_AVAILABLE != 'true'
         working-directory: android
         run: ./gradlew assembleDebug --no-daemon --stacktrace
-
-      - name: Build release APK (unsigned)
-        working-directory: android
-        run: ./gradlew assembleRelease --no-daemon --stacktrace
         continue-on-error: true
 
-      - name: Generate signing key
-        if: github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main')
-        run: |
-          if [ -n "${{ secrets.SIGNING_KEY_BASE64 }}" ]; then
-            echo "Using provided signing key"
-            echo "${{ secrets.SIGNING_KEY_BASE64 }}" | base64 -d > android/app/release.keystore
-          else
-            echo "Generating debug signing key for release APK"
-            keytool -genkey -v -keystore android/app/release.keystore \
-              -alias zai-shell -keyalg RSA -keysize 2048 -validity 10000 \
-              -storepass zai-shell-pass -keypass zai-shell-pass \
-              -dname "CN=ZaiShell, OU=Dev, O=Alain314159, L=Havana, ST=Havana, C=CU"
-          fi
-
-      - name: Sign release APK
-        if: github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main')
+      - name: Verify APK signature
+        if: env.KEYSTORE_AVAILABLE == 'true'
         working-directory: android
         run: |
-          # Copiar APK unsigned a temporal
-          cp app/build/outputs/apk/release/app-release-unsigned.apk app-release.apk || true
+          APKSIGNER=$(find $ANDROID_HOME -name apksigner 2>/dev/null | head -1)
+          echo "=== APK Release signature ==="
+          $APKSIGNER verify --print-certs app/build/outputs/apk/release/app-release.apk | head -10 || true
+          echo "=== APK Debug signature ==="
+          $APKSIGNER verify --print-certs app/build/outputs/apk/debug/app-debug.apk | head -10 || true
 
-          # Si existe release.keystore, firmar
-          if [ -f app/release.keystore ]; then
-            APKSIGNER=$(find $ANDROID_HOME -name apksigner 2>/dev/null | head -1)
-            if [ -z "$APKSIGNER" ]; then
-              APKSIGNER=$(find ~ -name apksigner 2>/dev/null | head -1)
-            fi
-
-            STORE_PASS="${{ secrets.SIGNING_STORE_PASSWORD }}"
-            if [ -z "$STORE_PASS" ]; then STORE_PASS="zai-shell-pass"; fi
-
-            KEY_PASS="${{ secrets.SIGNING_KEY_PASSWORD }}"
-            if [ -z "$KEY_PASS" ]; then KEY_PASS="zai-shell-pass"; fi
-
-            KEY_ALIAS="${{ secrets.SIGNING_KEY_ALIAS }}"
-            if [ -z "$KEY_ALIAS" ]; then KEY_ALIAS="zai-shell"; fi
-
-            $APKSIGNER sign --ks app/release.keystore --ks-pass pass:$STORE_PASS \
-              --ks-key-alias $KEY_ALIAS --key-pass pass:$KEY_PASS \
-              --out app-release-signed.apk app-release.apk
-
-            echo "APK signed successfully"
-          else
-            echo "No keystore found, using unsigned APK"
-            cp app-release.apk app-release-signed.apk
-          fi
-        continue-on-error: true
+      - name: Upload release APK (signed, installable over previous)
+        uses: actions/upload-artifact@v4
+        with:
+          name: zai-shell-release
+          path: android/app/build/outputs/apk/release/*.apk
+          retention-days: 90
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
           name: zai-shell-debug
           path: android/app/build/outputs/apk/debug/*.apk
-          retention-days: 30
-
-      - name: Upload release APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: zai-shell-release
-          path: |
-            android/app-release-signed.apk
-            android/app/build/outputs/apk/release/*.apk
-          retention-days: 30
-          if-no-files-found: warn
+          retention-days: 90
 
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            android/app-release-signed.apk
+            android/app/build/outputs/apk/release/*.apk
             android/app/build/outputs/apk/debug/*.apk
           generate_release_notes: true
           draft: false
@@ -149,8 +158,12 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- Status: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
           echo "- Branch/Tag: ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
-          echo "- Commit: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Keystore: ${{ env.KEYSTORE_AVAILABLE }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Artifacts" >> $GITHUB_STEP_SUMMARY
-          echo "- Debug APK: download \`zai-shell-debug\` artifact" >> $GITHUB_STEP_SUMMARY
-          echo "- Release APK: download \`zai-shell-release\` artifact" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ env.KEYSTORE_AVAILABLE }}" = "true" ]; then
+            echo "### ✅ APK actualizable" >> $GITHUB_STEP_SUMMARY
+            echo "El APK release está firmado con keystore permanente. Se puede instalar encima de versiones anteriores SIN desinstalar." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### ⚠️ APK no actualizable" >> $GITHUB_STEP_SUMMARY
+            echo "Falta configurar RELEASE_KEYSTORE secret. Los APKs no se podrán actualizar sin desinstalar primero." >> $GITHUB_STEP_SUMMARY
+          fi
