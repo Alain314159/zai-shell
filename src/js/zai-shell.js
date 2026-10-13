@@ -556,10 +556,63 @@
           if (window.Capacitor?.Plugins?.Haptics) {
             window.Capacitor.Plugins.Haptics.impact({ style: 'LIGHT' });
           }
+          // Si la app esta en background, mandar notificacion nativa
+          if (document.hidden) {
+            sendBackgroundNotification();
+          }
         } catch (e) {}
       }
       lastResponding = now;
     }, 1000);
+  }
+
+  /**
+   * Envía una notificación local nativa cuando el modelo termina de responder
+   * y la app está en background.
+   */
+  async function sendBackgroundNotification() {
+    try {
+      if (!window.Capacitor?.Plugins?.LocalNotifications) return;
+      const { LocalNotifications } = window.Capacitor.Plugins;
+      // Solicitar permiso si no lo tenemos
+      const perm = await LocalNotifications.checkPermissions();
+      if (perm.display !== 'granted') {
+        const req = await LocalNotifications.requestPermissions();
+        if (req.display !== 'granted') return;
+      }
+      // Obtener preview de la ultima respuesta
+      const msgs = findMessages();
+      const userMsgs = findUserMessages();
+      const userSet = new Set(userMsgs);
+      let lastResponse = null;
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        if (!userSet.has(msgs[i])) { lastResponse = msgs[i]; break; }
+      }
+      let preview = 'Toca para abrir';
+      if (lastResponse) {
+        const text = (lastResponse.innerText || '').trim();
+        if (text) preview = text.slice(0, 80) + (text.length > 80 ? '...' : '');
+      }
+      // Notificacion con ID unico basado en timestamp
+      const notifId = Math.floor(Date.now() / 1000) % 100000;
+      await LocalNotifications.schedule({
+        notifications: [{
+          id: notifId,
+          title: '⚡ Z.ai respondió',
+          body: preview,
+          largeBody: preview,
+          smallIcon: 'ic_notification',
+          iconColor: '#3b82f6',
+          sound: 'bell.wav',
+          schedule: { at: new Date(Date.now() + 100) },
+          actionTypeId: 'OPEN_APP',
+          extra: { type: 'response_complete' }
+        }]
+      });
+      log('Background notification sent (id=' + notifId + ')');
+    } catch (e) {
+      log('Notification failed', e);
+    }
   }
 
   // ====================================================================
