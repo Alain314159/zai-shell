@@ -333,8 +333,9 @@
   function startKeepAlive() {
     let lastPing = Date.now();
     setInterval(() => {
+      // GA2: skip when tab hidden - WebView throttles timers anyway
+      if (document.hidden) return;
       lastPing = Date.now();
-      // Hacer un micro-fetch al propio origen (no consume nada, solo mantiene activo)
       try {
         fetch('/favicon.ico', { cache: 'no-cache', mode: 'no-cors' }).catch(() => {});
       } catch (e) {}
@@ -412,7 +413,11 @@
   }
 
   function startCleanup() {
-    setInterval(cleanupOldMessages, CONFIG.CLEANUP_INTERVAL_MS);
+    setInterval(() => {
+      // GA2: skip when hidden
+      if (document.hidden) return;
+      cleanupOldMessages();
+    }, CONFIG.CLEANUP_INTERVAL_MS);
     // Tambien cuando el usuario scrollea arriba (libera mas)
     let scrollTimer = null;
     window.addEventListener('scroll', () => {
@@ -611,7 +616,11 @@
       if (h) h.textContent = cleanupCount;
     }
 
-    setInterval(updateStats, 5000);
+    setInterval(() => {
+      // GA2: skip when hidden
+      if (document.hidden) return;
+      updateStats();
+    }, 5000);
   }
 
   // ====================================================================
@@ -648,9 +657,16 @@
   let lastResponding = false;
   function watchResponseState() {
     setInterval(() => {
-      // HIGH #23: skip when tab hidden - WebView throttles timers anyway
       if (document.hidden) return;
       const now = isModelResponding();
+      // GA3: tell native about streaming state so it can toggle wake lock
+      if (now !== lastResponding) {
+        try {
+          if (window.Capacitor?.Plugins?.ZaiShell) {
+            window.Capacitor.Plugins.ZaiShell.setStreamingState({ active: now });
+          }
+        } catch (e) {}
+      }
       if (lastResponding && !now) {
         log('Response completed');
         try {
@@ -1423,7 +1439,10 @@
     }
 
     // Poll to reattach listener (textarea may be recreated by z.ai SPA)
-    setInterval(attachInputListener, 3000);
+    setInterval(() => {
+      if (document.hidden) return;
+      attachInputListener();
+    }, 3000);
 
     // 2. Al cargar, restaurar draft
     setTimeout(() => {

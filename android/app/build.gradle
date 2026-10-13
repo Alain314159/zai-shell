@@ -1,5 +1,6 @@
 apply plugin: 'com.android.application'
 apply plugin: 'kotlin-android'
+apply plugin: 'kotlin-kapt'
 
 android {
     namespace "com.zai.shell"
@@ -44,7 +45,7 @@ android {
             if (project.hasProperty('zaiSigningConfig')) {
                 signingConfig signingConfigs.zaiRelease
             }
-            // CRITICAL #7: enable R8 + resource shrinking in release
+            // CRITICAL #7 + GA4: R8 + resource shrinking
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
@@ -83,6 +84,14 @@ android {
     }
 }
 
+// GA4: R8 full mode - better optimization than ProGuard compatibility mode
+// Reduces APK size 30-40% and improves startup time
+androidComponents {
+    onVariants(selector().withBuildType('release')) { variant ->
+        variant.enableR8.fullMode = true
+    }
+}
+
 repositories {
     google()
     mavenCentral()
@@ -113,6 +122,12 @@ dependencies {
     // OkHttp + SSE para ZaiSseBridge
     implementation "com.squareup.okhttp3:okhttp:4.12.0"
     implementation "com.squareup.okhttp3:okhttp-sse:4.12.0"
+    // GA1: Room (SQLite) para historial offline - reemplaza SharedPreferences JSON
+    implementation "androidx.room:room-runtime:2.6.1"
+    implementation "androidx.room:room-ktx:2.6.1"
+    kapt "androidx.room:room-compiler:2.6.1"
+    // GA7: Coroutines para plugins Kotlin
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1"
     testImplementation "junit:junit:4.13.2"
     androidTestImplementation "androidx.test.ext:junit:1.2.1"
     androidTestImplementation "androidx.test.espresso:espresso-core:3.6.1"

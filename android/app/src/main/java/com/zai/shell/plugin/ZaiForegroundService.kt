@@ -27,6 +27,21 @@ class ZaiForegroundService : Service() {
         const val CHANNEL_NAME = "Z.ai Shell Active"
         const val NOTIFICATION_ID = 1
         private const val TAG = "ZaiForeground"
+        // GA3: static reference to current service instance for streaming state control
+        @Volatile
+        private var currentInstance: ZaiForegroundService? = null
+
+        /**
+         * GA3: Toggle streaming state from plugin.
+         * Calls setStreamingActive on the current service instance.
+         */
+        fun setStreamingStateStatic(context: Context, active: Boolean) {
+            try {
+                currentInstance?.setStreamingActive(active)
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not toggle streaming state: ${e.message}")
+            }
+        }
 
         fun start(context: Context) {
             val intent = Intent(context, ZaiForegroundService::class.java)
@@ -55,11 +70,15 @@ class ZaiForegroundService : Service() {
     }
 
     private var wakeLock: PowerManager.WakeLock? = null
+    // GA3: streaming state - when true, wake lock is held; when false, released after grace
+    @Volatile
+    private var streamingActive: Boolean = false
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
         acquireWakeLock()
+        currentInstance = this
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -122,10 +141,15 @@ class ZaiForegroundService : Service() {
                 "ZaiShell::ForegroundWakeLock"
             )
             wakeLock?.setReferenceCounted(false)
-            // CRITICAL #13: acquire without timeout - the service runs forever while app is alive
-            // (was 10min, never renewed despite the comment)
-            wakeLock?.acquire()
-            Log.i(TAG, "Wake lock acquired (no timeout)")
+            // GA3: conditional wake lock - only acquire when streaming is active
+            // The service itself stays running (foreground notif), but the CPU wake lock
+            // is only held when there's an active AI response being generated.
+            if (streamingActive) {
+                wakeLock?.acquire()
+                Log.i(TAG, "Wake lock acquired (streaming active)")
+            } else {
+                Log.i(TAG, "Wake lock NOT acquired (idle - service running but no streaming)")
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Error acquiring wake lock: ${e.message}")
         }
@@ -142,9 +166,48 @@ class ZaiForegroundService : Service() {
         }
     }
 
+    /**
+     * GA3: Toggle streaming state - call from JS when AI response starts/stops.
+     * When streaming starts, acquire wake lock. When stops, release (after a 30s grace period).
+     */
+    fun setStreamingActive(active: Boolean) {
+        Log.i(TAG, "Streaming active: $active (was: $streamingActive)")
+        if (active && !streamingActive) {
+            streamingActive = true
+            // Acquire wake lock if not held
+            try {
+                if (wakeLock == null) {
+                    val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+                    wakeLock = pm.newWakeLock(
+                        PowerManager.PARTIAL_WAKE_LOCK,
+                        "ZaiShell::ForegroundWakeLock"
+                    )
+                    wakeLock?.setReferenceCounted(false)
+                }
+                if (wakeLock?.isHeld == false) {
+                    wakeLock?.acquire()
+                    Log.i(TAG, "Wake lock acquired for streaming")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error acquiring wake lock for streaming: ${e.message}")
+            }
+        } else if (!active && streamingActive) {
+            streamingActive = false
+            // Release after 30s grace period (in case another message comes)
+            Thread {
+                Thread.sleep(30000)
+                if (!streamingActive && wakeLock?.isHeld == true) {
+                    try { wakeLock?.release() } catch (e: Exception) {}
+                    Log.i(TAG, "Wake lock released after grace period")
+                }
+            }.start()
+        }
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        currentInstance = null
         releaseWakeLock()
         super.onDestroy()
     }

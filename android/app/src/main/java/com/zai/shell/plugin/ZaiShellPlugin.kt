@@ -146,4 +146,22 @@ class ZaiShellPlugin : Plugin() {
         sb.append("\"")
         return sb.toString()
     }
+
+    /**
+     * GA3: Toggle streaming state - controls the foreground service wake lock.
+     * Called from JS when AI response starts/stops to save battery.
+     * { active: true/false }
+     */
+    @PluginMethod
+    fun setStreamingState(call: PluginCall) {
+        val active = call.getBoolean("active") ?: false
+        try {
+            // Get the foreground service instance and toggle streaming
+            // The service is started via ZaiForegroundService.start(), we use a static reference
+            ZaiForegroundService.setStreamingStateStatic(context, active)
+            call.resolve(JSObject().put("ok", true).put("streaming", active))
+        } catch (e: Exception) {
+            call.reject(e.message ?: "error setting streaming state")
+        }
+    }
 }
