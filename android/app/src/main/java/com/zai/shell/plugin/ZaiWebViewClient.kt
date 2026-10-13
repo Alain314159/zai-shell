@@ -88,29 +88,34 @@ class ZaiWebViewClient(private val bridge: Bridge) : WebViewClient() {
      * Intercepta TODAS las requests (XHR, fetch, imagenes, scripts, etc.)
      * Bloquea telemetry/analytics para mejorar performance y privacidad
      *
-     * Nota: usamos la sobrecarga con WebResourceRequest (API 21+) en vez de String
-     * para evitar ambiguedad de overload resolution en Kotlin
+     * Nota: no llamamos a super.shouldInterceptRequest() porque hay ambiguedad
+     * de overload en Kotlin entre las firmas (WebView, String) y (WebView, WebResourceRequest).
+     * Devolver null es equivalente al comportamiento por defecto del super (no interceptar).
      */
     override fun shouldInterceptRequest(
         view: WebView?,
         request: android.webkit.WebResourceRequest?
     ): android.webkit.WebResourceResponse? {
-        request ?: return super.shouldInterceptRequest(view, request)
-        val url = request.url?.toString() ?: return super.shouldInterceptRequest(view, request)
-        val lowerUrl = url.lowercase()
-        for (pattern in BLOCKED_PATTERNS) {
-            if (lowerUrl.contains(pattern)) {
-                Log.i(TAG, "Bloqueado (telemetry): $url")
-                return android.webkit.WebResourceResponse(
-                    "text/plain",
-                    "utf-8",
-                    java.io.ByteArrayInputStream(ByteArray(0))
-                ).apply {
-                    setStatusCodeAndReasonPhrase(204, "No Content (blocked by ZaiShell)")
+        if (request != null) {
+            val url = request.url?.toString()
+            if (url != null) {
+                val lowerUrl = url.lowercase()
+                for (pattern in BLOCKED_PATTERNS) {
+                    if (lowerUrl.contains(pattern)) {
+                        Log.i(TAG, "Bloqueado (telemetry): $url")
+                        val resp = android.webkit.WebResourceResponse(
+                            "text/plain",
+                            "utf-8",
+                            java.io.ByteArrayInputStream(ByteArray(0))
+                        )
+                        resp.setStatusCodeAndReasonPhrase(204, "No Content (blocked by ZaiShell)")
+                        return resp
+                    }
                 }
             }
         }
-        return super.shouldInterceptRequest(view, request)
+        // null = no interceptar, dejar que el WebView cargue normalmente
+        return null
     }
 
     override fun onPageFinished(view: WebView?, url: String?) {
