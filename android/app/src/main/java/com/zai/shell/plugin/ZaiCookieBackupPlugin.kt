@@ -95,7 +95,8 @@ class ZaiCookieBackupPlugin : Plugin() {
     fun clearCookies(call: PluginCall) {
         try {
             val cookieManager = CookieManager.getInstance()
-            cookieManager.removeAllCookies(null)
+            // MEDIUM #20: use ValueCallback instead of deprecated null
+            cookieManager.removeAllCookies(android.webkit.ValueCallback { _ -> })
             cookieManager.flush()
             WebStorage.getInstance().deleteAllData()
             call.resolve(JSObject().put("ok", true))

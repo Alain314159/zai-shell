@@ -7,16 +7,15 @@ const config: CapacitorConfig = {
   // Cargar la web de z.ai directamente en el WebView nativo
   server: {
     url: 'https://chat.z.ai',
-    cleartext: true,
     androidScheme: 'https',
   },
   android: {
     allowMixedContent: false,
     captureInput: true,
-    webContentsDebuggingEnabled: true,
+    // webContentsDebuggingEnabled solo en debug; en release se desactiva via BuildConfig
+    webContentsDebuggingEnabled: false,
     backgroundColor: '#0a0a0a',
     initialScale: 1,
-    // No scrollbounce en pantallas grandes
     scrollEnabled: true,
   },
   plugins: {

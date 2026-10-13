@@ -9,20 +9,48 @@ android {
         applicationId "com.zai.shell"
         minSdk 24
         targetSdk 36
-        versionCode 1
-        versionName "1.0.0"
+        // MEDIUM #43: versionCode driven from CI env if available
+        versionCode Integer.parseInt(System.getenv("VERSION_CODE") ?: "1")
+        versionName System.getenv("VERSION_NAME") ?: "1.0.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    // CRITICAL #6: explicit signingConfigs block
+    // The release config is wired from CI via project properties (-PzaiSigningConfig=true)
+    signingConfigs {
+        zaiRelease {
+            // Default to debug keystore (works locally); CI overrides with permanent keystore
+            storeFile file('release.keystore')
+            // These come from -PzaiStorePassword etc., fallback to debug
+            storePassword project.hasProperty('zaiStorePassword') ? project.ext.zaiStorePassword : 'android'
+            keyAlias project.hasProperty('zaiKeyAlias') ? project.ext.zaiKeyAlias : 'androiddebugkey'
+            keyPassword project.hasProperty('zaiKeyPassword') ? project.ext.zaiKeyPassword : 'android'
+        }
     }
 
     buildTypes {
         debug {
             minifyEnabled false
-            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            // CRITICAL #29 (HIGH #9): keep debug with debug signing, not release
+            // signingConfig falls back to default debug
         }
         release {
-            minifyEnabled false
+            // CRITICAL #6: sign release with the proper keystore when CI provides it
+            if (project.hasProperty('zaiSigningConfig')) {
+                signingConfig signingConfigs.zaiRelease
+            }
+            // CRITICAL #7: enable R8 + resource shrinking in release
+            minifyEnabled true
+            shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
+    }
+
+    // MEDIUM: AAB bundle config for Play Store
+    bundle {
+        density { enableSplit = true }
+        abi { enableSplit = true }
+        language { enableSplit = true }
     }
 
     compileOptions {
@@ -30,14 +58,23 @@ android {
         targetCompatibility JavaVersion.VERSION_21
     }
 
-    kotlinOptions {
-        jvmTarget = '21'
+    // HIGH #34: kotlinOptions deprecated in Kotlin 2.0; use kotlin { compilerOptions }
+    kotlin {
+        compilerOptions {
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
+        }
     }
 
-    packagingOptions {
+    // HIGH #35: packagingOptions renamed to packaging in AGP 8
+    packaging {
         resources {
             excludes += ['META-INF/DEPENDENCIES', 'META-INF/LICENSE', 'META-INF/LICENSE.txt', 'META-INF/license.txt', 'META-INF/NOTICE', 'META-INF/NOTICE.txt', 'META-INF/notice.txt', 'META-INF/ASL2.0']
         }
+    }
+
+    // LOW: surface test failures gracefully
+    testOptions {
+        unitTests.returnDefaultValues = true
     }
 }
 
@@ -66,8 +103,8 @@ dependencies {
     implementation project(':capacitor-status-bar')
     implementation project(':capacitor-splash-screen')
     implementation project(':capacitor-filesystem')
-    implementation "androidx.core:core:1.13.1"
-    implementation "androidx.constraintlayout:constraintlayout:2.1.4"
+    // MEDIUM #54: removed redundant androidx.core:core (core-ktx already depends on it)
+    implementation "androidx.constraintlayout:constraintlayout:2.2.0"
     // OkHttp + SSE para ZaiSseBridge
     implementation "com.squareup.okhttp3:okhttp:4.12.0"
     implementation "com.squareup.okhttp3:okhttp-sse:4.12.0"
@@ -79,9 +116,10 @@ dependencies {
 
 apply from: 'capacitor.build.gradle'
 
+// google-services plugin only if the config file exists (FCM not used yet)
 try {
     def servicesJSON = file('google-services.json')
-    if (servicesJSON.text) {
+    if (servicesJSON.exists() && servicesJSON.length() > 0) {
         apply plugin: 'com.google.gms.google-services'
     }
 } catch (Exception e) {

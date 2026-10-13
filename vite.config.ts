@@ -11,6 +11,7 @@ export default defineConfig({
   },
   server: {
     port: 5173,
-    host: true,
+    // LOW #19: don't expose dev server on all interfaces
+    host: 'localhost',
   },
 });

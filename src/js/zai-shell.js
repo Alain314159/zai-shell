@@ -21,8 +21,9 @@
     DEBUG: false,
   };
 
-  function log() {
-    if (CONFIG.DEBUG) console.log('[ZaiShell]', ...arguments);
+  // LOW #27: use rest params instead of arguments
+  function log(...args) {
+    if (CONFIG.DEBUG) console.log('[ZaiShell]', ...args);
   }
 
   // ====================================================================
@@ -310,6 +311,11 @@
   `;
 
   function injectCSS() {
+    // HIGH #25: dedupe - skip if already injected (called on SPA URL changes)
+    if (document.getElementById('zai-shell-css')) {
+      log('CSS already injected, skipping');
+      return;
+    }
     try {
       const style = document.createElement('style');
       style.id = 'zai-shell-css';
@@ -642,20 +648,18 @@
   let lastResponding = false;
   function watchResponseState() {
     setInterval(() => {
+      // HIGH #23: skip when tab hidden - WebView throttles timers anyway
+      if (document.hidden) return;
       const now = isModelResponding();
       if (lastResponding && !now) {
-        // El modelo termino de responder
         log('Response completed');
         try {
-          // Vibracion corta si esta disponible
           if (window.Capacitor?.Plugins?.Haptics) {
             window.Capacitor.Plugins.Haptics.impact({ style: 'LIGHT' });
           }
-          // Si la app esta en background, mandar notificacion nativa
           if (document.hidden) {
             sendBackgroundNotification();
           }
-          // Auto-guardar conversacion en historial offline
           autoSaveConversation();
         } catch (e) {}
       }
@@ -690,8 +694,9 @@
         const text = (lastResponse.innerText || '').trim();
         if (text) preview = text.slice(0, 80) + (text.length > 80 ? '...' : '');
       }
-      // Notificacion con ID unico basado en timestamp
-      const notifId = Math.floor(Date.now() / 1000) % 100000;
+      // MEDIUM #25: monotonic counter to avoid collision when 2 responses complete in same second
+      sendBackgroundNotification._counter = (sendBackgroundNotification._counter || 0) + 1;
+      const notifId = (sendBackgroundNotification._counter % 100000) + 1;
       await LocalNotifications.schedule({
         notifications: [{
           id: notifId,
@@ -701,7 +706,8 @@
           smallIcon: 'ic_notification',
           iconColor: '#3b82f6',
           sound: 'bell.wav',
-          schedule: { at: new Date(Date.now() + 100) },
+          // HIGH #40: schedule at least 1s ahead (Android rounds to next minute for exact alarms)
+          schedule: { at: new Date(Date.now() + 1000) },
           actionTypeId: 'OPEN_APP',
           extra: { type: 'response_complete' }
         }]
@@ -771,7 +777,16 @@
         for (const n of nodes) {
           const text = n.textContent;
           const span = document.createElement('span');
-          span.innerHTML = text.replace(regex, m => `<mark class="zai-shell-highlight" style="background:#fbbf24;color:#000;padding:0 2px;border-radius:2px;">${m}</mark>`);
+          // XSS FIX: escapar el texto antes de insertarlo como HTML
+          // Solo los <mark> son inyectados por nosotros, el resto va escapado
+          const escaped = text.replace(/[&<>"']/g, c => ({
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+          }[c]));
+          // Re-aplicar el regex sobre el texto escapado para encontrar matches
+          const escapedRegex = new RegExp(regex.source, regex.flags);
+          span.innerHTML = escaped.replace(escapedRegex, m =>
+            `<mark class="zai-shell-highlight" style="background:#fbbf24;color:#000;padding:0 2px;border-radius:2px;">${m}</mark>`
+          );
           n.parentNode.replaceChild(span, n);
           matches.push(span);
         }
@@ -916,7 +931,7 @@
       'autocorrect': 'on',
       'spellcheck': 'true',
       'autocomplete': 'on',
-      'lang': 'es',
+      'lang': navigator.language || 'es',
       'enterkeyhint': 'send',
       'inputmode': 'text',
     };
@@ -1070,8 +1085,8 @@
           <div style="font-weight:bold;color:#fff;margin-bottom:4px;">${escapeHtml(c.title)}</div>
           <div style="color:#94a3b8;font-size:12px;">${date} · ${c.messageCount} mensajes</div>
           <div style="display:flex;gap:6px;margin-top:8px;">
-            <button class="zai-history-view" data-id="${c.id}" style="background:#3b82f6;color:white;border:none;padding:4px 10px;border-radius:4px;cursor:pointer;font-size:11px;">Ver</button>
-            <button class="zai-history-del" data-id="${c.id}" style="background:#dc2626;color:white;border:none;padding:4px 10px;border-radius:4px;cursor:pointer;font-size:11px;">Borrar</button>
+            <button class="zai-history-view" data-id="${escapeHtml(c.id)}" style="background:#3b82f6;color:white;border:none;padding:4px 10px;border-radius:4px;cursor:pointer;font-size:11px;">Ver</button>
+            <button class="zai-history-del" data-id="${escapeHtml(c.id)}" style="background:#dc2626;color:white;border:none;padding:4px 10px;border-radius:4px;cursor:pointer;font-size:11px;">Borrar</button>
           </div>
         `;
         list.appendChild(item);
@@ -1350,29 +1365,80 @@
   let pendingOutgoing = null;
 
   function setupOutgoingPersistence() {
-    // 1. Auto-guardar el texto del textarea cada 1s
-    setInterval(() => {
-      const ta = document.querySelector('textarea#chat-input, textarea[placeholder*="Message" i], textarea[placeholder*="Send" i], textarea');
-      if (!ta) return;
-      const text = ta.value || '';
-      try {
-        if (text.trim()) {
-          localStorage.setItem('zai-shell-draft', text);
-        } else {
-          localStorage.removeItem('zai-shell-draft');
-        }
-      } catch (e) {}
-    }, 1000);
+    // CRITICAL #2: replaced body-wide MutationObserver with input listener on textarea
+    // HIGH #7: replaced 1s setInterval with input event (debounced)
+
+    function findTa() {
+      return document.querySelector('textarea#chat-input, textarea[placeholder*="Message" i], textarea[placeholder*="Send" i], textarea');
+    }
+
+    // Debounced save
+    let saveTimer = null;
+    function saveDraft(text) {
+      if (saveTimer) clearTimeout(saveTimer);
+      saveTimer = setTimeout(() => {
+        try {
+          if (text && text.trim()) {
+            localStorage.setItem('zai-shell-draft', text);
+          } else {
+            localStorage.removeItem('zai-shell-draft');
+          }
+        } catch (e) {}
+      }, 500);
+    }
+
+    // 1. Hook input event on textarea (reattach if z.ai recreates it)
+    let lastTa = null;
+    function attachInputListener() {
+      const ta = findTa();
+      if (ta === lastTa) return;
+      if (lastTa) {
+        try { lastTa.removeEventListener('input', onInput); } catch (e) {}
+      }
+      lastTa = ta;
+      if (ta) {
+        ta.addEventListener('input', onInput, { passive: true });
+        // Also detect when textarea empties (message sent)
+        ta.addEventListener('input', onSendDetect, { passive: true });
+      }
+    }
+
+    function onInput(e) {
+      saveDraft(e.target.value || '');
+    }
+
+    function onSendDetect(e) {
+      // Si el textarea se vacia pero habia draft, se envio
+      if (!e.target.value && localStorage.getItem('zai-shell-draft')) {
+        const sent = localStorage.getItem('zai-shell-draft');
+        localStorage.removeItem('zai-shell-draft');
+        pendingOutgoing = {
+          text: sent,
+          timestamp: Date.now(),
+          confirmed: false
+        };
+        log('Outgoing message tracked: ' + sent.length + ' chars');
+        setTimeout(() => confirmOutgoingMessage(), 5000);
+      }
+    }
+
+    // Poll to reattach listener (textarea may be recreated by z.ai SPA)
+    setInterval(attachInputListener, 3000);
 
     // 2. Al cargar, restaurar draft
     setTimeout(() => {
       try {
         const draft = localStorage.getItem('zai-shell-draft');
         if (draft) {
-          const ta = document.querySelector('textarea#chat-input, textarea[placeholder*="Message" i], textarea[placeholder*="Send" i], textarea');
+          const ta = findTa();
           if (ta && !ta.value) {
-            const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
-            setter.call(ta, draft);
+            // MEDIUM #16: null check on descriptor
+            const desc = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value');
+            if (desc && desc.set) {
+              desc.set.call(ta, draft);
+            } else {
+              ta.value = draft;
+            }
             ta.dispatchEvent(new Event('input', { bubbles: true }));
             log('Draft restored: ' + draft.length + ' chars');
           }
@@ -1380,32 +1446,10 @@
       } catch (e) {}
     }, 2000);
 
-    // 3. Interceptar el envio para guardar el mensaje en historial "pending"
-    // y limpiar el draft solo cuando el mensaje aparece en el DOM
-    const sendBtn = document.querySelector('button[type="submit"], div[role="button"][aria-label*="Send" i] button, div[role="button"][aria-label*="Send" i]');
-    // No podemos pegar al click del boton porque z.ai lo recrea
-    // En vez, observamos cuando el textarea se vacia = se envio
-    const observer = new MutationObserver(() => {
-      const ta = document.querySelector('textarea#chat-input, textarea[placeholder*="Message" i], textarea[placeholder*="Send" i], textarea');
-      if (!ta) return;
-      // Si el textarea esta vacio pero habia draft, se envio
-      if (!ta.value && localStorage.getItem('zai-shell-draft')) {
-        const sent = localStorage.getItem('zai-shell-draft');
-        localStorage.removeItem('zai-shell-draft');
-        // Guardar como pending outgoing (se confirma cuando aparece en el DOM)
-        pendingOutgoing = {
-          text: sent,
-          timestamp: Date.now(),
-          confirmed: false
-        };
-        log('Outgoing message tracked: ' + sent.length + ' chars');
-        // Verificar confirmacion en 5s
-        setTimeout(() => confirmOutgoingMessage(), 5000);
-      }
-    });
-    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+    // Initial attach
+    attachInputListener();
 
-    log('Outgoing persistence installed');
+    log('Outgoing persistence installed (input listener)');
   }
 
   function confirmOutgoingMessage() {
@@ -1457,23 +1501,27 @@
     const originalFetch = window.fetch;
     let streamCounter = 0;
 
-    // Listener para eventos del nativo
+    // CRITICAL #24: store listener handle for proper cleanup
     const streamCallbacks = new Map();
-    SseBridge.addListener('sse:event', (event) => {
-      const cb = streamCallbacks.get(event.id);
-      if (!cb) return;
-      if (event.type === 'open') {
-        cb.onOpen && cb.onOpen(event.code || 200);
-      } else if (event.type === 'event') {
-        cb.onEvent && cb.onEvent(event.eventType || 'message', event.data || '', event.eventId);
-      } else if (event.type === 'closed') {
-        cb.onClose && cb.onClose();
-        streamCallbacks.delete(event.id);
-      } else if (event.type === 'error') {
-        cb.onError && cb.onError(new Error(event.message || 'SSE error'), event.code);
-        streamCallbacks.delete(event.id);
-      }
-    });
+    let sseListenerHandle = null;
+    SseBridge.addListener('sse:event').then(handle => {
+      sseListenerHandle = handle;
+      handle.addListener((event) => {
+        const cb = streamCallbacks.get(event.id);
+        if (!cb) return;
+        if (event.type === 'open') {
+          cb.onOpen && cb.onOpen(event.code || 200);
+        } else if (event.type === 'event') {
+          cb.onEvent && cb.onEvent(event.eventType || 'message', event.data || '', event.eventId);
+        } else if (event.type === 'closed') {
+          cb.onClose && cb.onClose();
+          streamCallbacks.delete(event.id);
+        } else if (event.type === 'error') {
+          cb.onError && cb.onError(new Error(event.message || 'SSE error'), event.code);
+          streamCallbacks.delete(event.id);
+        }
+      });
+    }).catch(e => log('SseBridge.addListener failed', e));
 
     function isStreamRequest(url, options) {
       const lowerUrl = (url || '').toLowerCase();
@@ -1487,11 +1535,25 @@
     }
 
     window.fetch = async function(input, init) {
-      const url = typeof input === 'string' ? input : (input?.url || '');
-      const options = init || {};
+      // CRITICAL #26: handle Request objects - extract method/headers/body/credentials
+      let url, options;
+      if (input instanceof Request) {
+        url = input.url;
+        options = {
+          method: input.method,
+          headers: input.headers,
+          body: init?.body || input.body,
+          credentials: input.credentials,
+          mode: input.mode,
+          ...init
+        };
+      } else {
+        url = typeof input === 'string' ? input : (input?.url || '');
+        options = init || {};
+      }
 
       if (!isStreamRequest(url, options)) {
-        return originalFetch.call(this, input, init);
+        return originalFetch(input, init);
       }
 
       log('Intercepting SSE stream:', url.slice(0, 100));
@@ -1503,11 +1565,38 @@
         } else if (Array.isArray(options.headers)) {
           options.headers.forEach(([k, v]) => { headersObj[k] = v; });
         } else {
-          Object.assign(headersObj, options.headers);
+          // MEDIUM #26: filter prototype pollution keys
+          Object.entries(options.headers).forEach(([k, v]) => {
+            if (!['__proto__', 'constructor', 'prototype'].includes(k)) {
+              headersObj[k] = v;
+            }
+          });
         }
       }
       if (options.method?.toUpperCase() === 'POST' && !headersObj['Content-Type'] && !headersObj['content-type']) {
         headersObj['Content-Type'] = 'application/json';
+      }
+
+      // CRITICAL #26: serialize body for native transport
+      let bodyStr = null;
+      if (typeof options.body === 'string') {
+        bodyStr = options.body;
+      } else if (options.body instanceof URLSearchParams) {
+        bodyStr = options.body.toString();
+        headersObj['Content-Type'] = headersObj['Content-Type'] || 'application/x-www-form-urlencoded';
+      } else if (options.body instanceof FormData) {
+        // FormData no se puede serializar facilmente - fallback al fetch original
+        log('FormData body detected, falling back to original fetch');
+        return originalFetch(input, init);
+      } else if (options.body instanceof Blob) {
+        // Convertir Blob a texto via FileReader - pero es async, mejor fallback
+        log('Blob body detected, falling back to original fetch');
+        return originalFetch(input, init);
+      } else if (options.body) {
+        try { bodyStr = String(options.body); } catch (e) {
+          log('Could not serialize body, falling back');
+          return originalFetch(input, init);
+        }
       }
 
       const streamId = 'sse-' + (++streamCounter) + '-' + Date.now();
@@ -1550,11 +1639,11 @@
           url: url,
           method: options.method || 'GET',
           headers: headersObj,
-          body: typeof options.body === 'string' ? options.body : null
+          body: bodyStr
         });
       } catch (e) {
         log('Failed to start native SSE, fallback:', e.message);
-        return originalFetch.call(this, input, init);
+        return originalFetch(input, init);
       }
 
       return new Response(readable, {
@@ -1598,24 +1687,12 @@
       log('Session restore failed', e);
     }
 
-    // 2. Guardar cookies periodicamente (cada 5 min)
-    setInterval(async () => {
-      try {
-        const result = await window.Capacitor.Plugins.ZaiCookieBackup.exportCookies();
-        if (result.zai && result.zai.length > 50) {
-          // Solo guardar si hay sesion real (cookies > 50 chars)
-          await window.Capacitor.Plugins.ZaiCookieBackup.saveCookieBackup({
-            cookies: result.zai
-          });
-          window.localStorage.setItem('zai-shell-has-session', '1');
-          log('Cookies guardadas como backup (' + result.zai.length + ' chars)');
-        }
-      } catch (e) {}
-    }, 5 * 60 * 1000);
-
-    // 3. Guardar al detectar login (cuando aparecen cookies nuevas)
+    // 2. Guardar cookies al detectar cambios (cada 10s, salta si hidden)
+    // MEDIUM #21: removed redundant 5min interval - the 10s one dominates
     let lastCookieCheck = '';
     setInterval(async () => {
+      // HIGH #23: skip when hidden
+      if (document.hidden) return;
       try {
         const current = document.cookie || '';
         if (current.length > 100 && current !== lastCookieCheck) {
@@ -1624,6 +1701,7 @@
           if (result.zai && result.zai.length > 50) {
             await window.Capacitor.Plugins.ZaiCookieBackup.saveCookieBackup({ cookies: result.zai });
             window.localStorage.setItem('zai-shell-has-session', '1');
+            log('Cookies guardadas como backup (' + result.zai.length + ' chars)');
           }
         }
       } catch (e) {}
@@ -1639,24 +1717,30 @@
   function setupFullscreenBlocker() {
     // Dominios permitidos para iframes (z.ai y sus subdominios)
     const ALLOWED_IFRAME_DOMAINS = ['z.ai', 'chat.z.ai', 'bigmodel.cn', 'zhipuai.cn', 'chatglm.site', 'zcode.z.ai'];
+    const ZAI_OWN_IDS = new Set(['zai-shell-fab','zai-shell-panel','zai-shell-pull-indicator','zai-focus-exit','zai-shell-search','zai-shell-history-panel','zai-shell-toast']);
 
     function isAllowedIframeSrc(src) {
-      if (!src) return true; // about:blank o sin src = ok
+      if (!src) return true;
       try {
         const url = new URL(src, location.href);
         const host = url.hostname;
         return ALLOWED_IFRAME_DOMAINS.some(d => host === d || host.endsWith('.' + d));
       } catch (e) {
-        return true; // si no se puede parsear, dejar pasar
+        return true;
       }
     }
 
-    // Observer para detectar iframes nuevos
-    const iframeObserver = new MutationObserver((mutations) => {
-      for (const mut of mutations) {
-        for (const node of mut.addedNodes) {
+    // CRITICAL #22: throttle MutationObserver via requestAnimationFrame
+    let pendingCheck = false;
+    const pendingNodes = [];
+    function scheduleCheck() {
+      if (pendingCheck) return;
+      pendingCheck = true;
+      requestAnimationFrame(() => {
+        pendingCheck = false;
+        const nodes = pendingNodes.splice(0);
+        for (const node of nodes) {
           if (node.nodeType !== 1) continue;
-          // Detectar iframes
           if (node.tagName === 'IFRAME' || (node.querySelector && node.querySelector('iframe'))) {
             const iframes = node.tagName === 'IFRAME' ? [node] : Array.from(node.querySelectorAll('iframe'));
             for (const iframe of iframes) {
@@ -1665,36 +1749,44 @@
                 log('Bloqueando iframe de dominio externo:', src.slice(0, 80));
                 iframe.remove();
                 toast('Terminal externo bloqueado');
-                return;
+                continue;
               }
-              // Si el iframe es de z.ai pero ocupa toda la pantalla, anadir boton de cierre
-              setTimeout(() => {
-                checkFullscreenElement(iframe);
-              }, 100);
+              setTimeout(() => checkFullscreenElement(iframe), 100);
             }
           }
-          // Detectar elementos fullscreen (terminales internos de z.ai)
           checkFullscreenElement(node);
         }
+      });
+    }
+
+    const iframeObserver = new MutationObserver((mutations) => {
+      for (const mut of mutations) {
+        for (const node of mut.addedNodes) {
+          pendingNodes.push(node);
+        }
       }
+      if (pendingNodes.length > 0) scheduleCheck();
     });
 
+    // CRITICAL #22: avoid getComputedStyle in hot path - use classList + boundingRect only when needed
     function checkFullscreenElement(el) {
       if (!el || !el.style) return;
-      const style = window.getComputedStyle(el);
-      const isFixed = style.position === 'fixed';
-      const isFullScreen = isFixed && (
-        (style.inset === '0' || (style.top === '0px' && style.left === '0px' && style.right === '0px' && style.bottom === '0px')) ||
-        (el.offsetWidth >= window.innerWidth * 0.95 && el.offsetHeight >= window.innerHeight * 0.9)
-      );
-      if (isFullScreen && el.id !== 'zai-shell-fab' && el.id !== 'zai-shell-panel' &&
-          el.id !== 'zai-shell-pull-indicator' && el.id !== 'zai-focus-exit' &&
-          el.id !== 'zai-shell-search' && el.id !== 'zai-shell-history-panel' &&
-          el.id !== 'zai-shell-toast' && !el.dataset.zaiShellManaged) {
-        // Es un elemento fullscreen que no es nuestro - anadir boton de cierre
-        if (!el.querySelector('.zai-shell-close-overlay')) {
-          addCloseButton(el);
-        }
+      // Skip our own elements
+      if (el.id && ZAI_OWN_IDS.has(el.id)) return;
+      if (el.dataset && el.dataset.zaiShellManaged) return;
+      // Quick check: only inspect position:fixed elements (cheap)
+      if (el.style.position !== 'fixed') {
+        // Also check computed style (only for elements that might be fullscreen)
+        try {
+          const cs = window.getComputedStyle(el);
+          if (cs.position !== 'fixed') return;
+        } catch (e) { return; }
+      }
+      // Use getBoundingClientRect (one forced layout) instead of offsetWidth/Height
+      const rect = el.getBoundingClientRect();
+      const isFullScreen = rect.width >= window.innerWidth * 0.95 && rect.height >= window.innerHeight * 0.9;
+      if (isFullScreen && !el.querySelector('.zai-shell-close-overlay')) {
+        addCloseButton(el);
       }
     }
 
@@ -1709,22 +1801,24 @@
         e.stopPropagation();
         log('Cerrando elemento fullscreen');
         target.remove();
+        btn.remove();
         toast('Cerrado');
       });
       document.body.appendChild(btn);
-      // Auto-remover el boton si el target desaparece
-      const checker = setInterval(() => {
+      // MEDIUM #15: single shared MutationObserver instead of per-button setInterval
+      const observer = new MutationObserver(() => {
         if (!target.parentNode) {
           btn.remove();
-          clearInterval(checker);
+          observer.disconnect();
         }
-      }, 1000);
-      // Auto-remover despues de 60s si no se cierra
-      setTimeout(() => { if (btn.parentNode) { btn.remove(); clearInterval(checker); } }, 60000);
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+      // Auto-remover despues de 60s
+      setTimeout(() => { if (btn.parentNode) { btn.remove(); observer.disconnect(); } }, 60000);
     }
 
     iframeObserver.observe(document.body, { childList: true, subtree: true });
-    log('Fullscreen blocker installed');
+    log('Fullscreen blocker installed (throttled)');
   }
 
   // ====================================================================
@@ -1760,16 +1854,27 @@
     boot();
   }
 
-  // Re-inyectar si la URL cambia (SPA)
-  let lastUrl = location.href;
-  setInterval(() => {
-    if (location.href !== lastUrl) {
-      lastUrl = location.href;
-      log('URL changed, re-injecting');
-      setTimeout(() => {
-        injectCSS();
-        createFAB();
-      }, 1000);
-    }
-  }, 2000);
+  // Re-inyectar si la URL cambia (SPA) - MEDIUM #19: patch history instead of polling
+  function onUrlChange() {
+    log('URL changed, re-injecting');
+    setTimeout(() => {
+      injectCSS();
+      createFAB();
+    }, 1000);
+  }
+  // Patch history methods
+  const _pushState = history.pushState;
+  const _replaceState = history.replaceState;
+  history.pushState = function() {
+    const r = _pushState.apply(this, arguments);
+    setTimeout(onUrlChange, 50);
+    return r;
+  };
+  history.replaceState = function() {
+    const r = _replaceState.apply(this, arguments);
+    setTimeout(onUrlChange, 50);
+    return r;
+  };
+  window.addEventListener('popstate', onUrlChange);
+  window.addEventListener('hashchange', onUrlChange);
 })();

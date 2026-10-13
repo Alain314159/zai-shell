@@ -42,20 +42,20 @@ class ZaiSseBridgePlugin : Plugin() {
     }
 
     private var client: OkHttpClient? = null
-    private val activeStreams = mutableMapOf<String, EventSource>()
+    // CRITICAL #12: use ConcurrentHashMap for thread safety (OkHttp dispatcher vs plugin thread)
+    private val activeStreams = java.util.concurrent.ConcurrentHashMap<String, EventSource>()
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private fun getClient(): OkHttpClient {
-        if (client == null) {
-            client = OkHttpClient.Builder()
+        return client ?: synchronized(this) {
+            client ?: OkHttpClient.Builder()
                 .connectTimeout(30, TimeUnit.SECONDS)
-                .readTimeout(0, TimeUnit.SECONDS) // sin timeout para SSE
+                .readTimeout(0, TimeUnit.SECONDS)
                 .writeTimeout(30, TimeUnit.SECONDS)
-                .pingInterval(15, TimeUnit.SECONDS) // keepalive
+                .pingInterval(15, TimeUnit.SECONDS)
                 .retryOnConnectionFailure(true)
-                .build()
+                .build().also { client = it }
         }
-        return client!!
     }
 
     /**
@@ -147,10 +147,10 @@ class ZaiSseBridgePlugin : Plugin() {
                     activeStreams.remove(streamId)
                     // Auto-reintentar en 3s si la app sigue activa
                     mainHandler.postDelayed({
-                        if (bridge != null && activity != null && !activity!!.isFinishing) {
-                            Log.i(TAG, "Auto-retry SSE: $streamId")
-                            // Re-llamar a startStream con los mismos args
-                            // (necesitamos guardarlos - por ahora el JS re-invoca)
+                        // CRITICAL #19: avoid !! on activity (NPE if destroyed)
+                        val act = activity
+                        if (bridge != null && act != null && !act.isFinishing) {
+                            Log.i(TAG, "Auto-retry SSE: $streamId (reconnect from JS expected)")
                         }
                     }, 3000)
                 }
@@ -203,6 +203,15 @@ class ZaiSseBridgePlugin : Plugin() {
     override fun handleOnDestroy() {
         for ((_, es) in activeStreams) es.cancel()
         activeStreams.clear()
+        // HIGH #18: shutdown OkHttpClient to free connection pool + dispatcher
+        try {
+            client?.let {
+                it.dispatcher.executorService.shutdown()
+                it.connectionPool.evictAll()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Error shutting down OkHttp: ${e.message}")
+        }
         super.handleOnDestroy()
     }
 }

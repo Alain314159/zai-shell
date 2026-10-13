@@ -10,6 +10,7 @@ import android.os.Environment
 import android.util.Log
 import android.webkit.WebView
 import android.webkit.DownloadListener
+import com.zai.shell.BuildConfig
 import com.getcapacitor.BridgeActivity
 import com.zai.shell.plugin.ZaiForegroundService
 import com.zai.shell.plugin.ZaiCookieBackupPlugin
@@ -56,18 +57,22 @@ class MainActivity : BridgeActivity() {
         }
     }
 
+    private var widgetPromptRetries = 0
+    private val MAX_WIDGET_PROMPT_RETRIES = 30
+
     private fun tryInjectWidgetPrompt() {
         val prompt = pendingWidgetPrompt ?: return
-        val webView: WebView? = try {
-            this.javaClass.superclass.getDeclaredField("bridge").let { f ->
-                f.isAccessible = true
-                val b = f.get(this)
-                b?.javaClass?.getDeclaredField("webView")?.let { wf ->
-                    wf.isAccessible = true
-                    wf.get(b) as? WebView
-                }
-            }
-        } catch (e: Exception) { null }
+        // HIGH #16: cap retries to prevent infinite loop / battery drain
+        if (widgetPromptRetries >= MAX_WIDGET_PROMPT_RETRIES) {
+            Log.w(TAG, "Max retries reached for widget prompt, giving up")
+            pendingWidgetPrompt = null
+            widgetPromptRetries = 0
+            return
+        }
+        widgetPromptRetries++
+
+        // HIGH #10: use bridge.webView directly instead of reflection
+        val webView: WebView? = try { bridge?.webView } catch (e: Exception) { null }
 
         if (webView != null) {
             val js = """
@@ -80,8 +85,12 @@ class MainActivity : BridgeActivity() {
                             if (++attempts < 30) setTimeout(tryFill, 500);
                             return;
                         }
-                        var setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
-                        setter.call(textarea, prompt);
+                        var desc = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value');
+                        if (desc && desc.set) {
+                            desc.set.call(textarea, prompt);
+                        } else {
+                            textarea.value = prompt;
+                        }
                         textarea.dispatchEvent(new Event('input', { bubbles: true }));
                         textarea.dispatchEvent(new Event('change', { bubbles: true }));
                         setTimeout(function(){
@@ -96,10 +105,10 @@ class MainActivity : BridgeActivity() {
                 webView.evaluateJavascript(js, null)
                 Log.i(TAG, "Widget prompt injected")
                 pendingWidgetPrompt = null
+                widgetPromptRetries = 0
             }
         } else {
-            // Reintentar en 2s
-            Log.w(TAG, "WebView not ready for widget prompt, retrying in 2s")
+            Log.w(TAG, "WebView not ready for widget prompt, retry ${widgetPromptRetries}/$MAX_WIDGET_PROMPT_RETRIES")
             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                 tryInjectWidgetPrompt()
             }, 2000)
@@ -123,69 +132,87 @@ class MainActivity : BridgeActivity() {
     }
 
     private fun hookWebViewClient() {
+        // HIGH #10: use bridge.webView directly instead of reflection
+        // HIGH #15: fixed dead retry logic - use Handler with postDelayed
+        val webView: WebView? = try {
+            bridge?.webView
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not access bridge.webView: ${e.message}")
+            null
+        }
+
+        if (webView == null) {
+            // Retry on next loop (fixed: actually retries now)
+            Log.w(TAG, "WebView not yet available, will retry in 500ms")
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                hookWebViewClient()
+            }, 500)
+            return
+        }
+
         try {
-            val webView: WebView? = try {
-                this.javaClass.superclass.getDeclaredField("bridge").let { f ->
-                    f.isAccessible = true
-                    val b = f.get(this)
-                    b?.javaClass?.getDeclaredField("webView")?.let { wf ->
-                        wf.isAccessible = true
-                        wf.get(b) as? WebView
-                    }
+            val wv = webView
+            wv.webViewClient = ZaiWebViewClient(bridge)
+            val chromeClient = ZaiWebChromeClient(bridge)
+            zaiWebChromeClient = chromeClient
+            wv.webChromeClient = chromeClient
+
+            // CRITICAL #1: WebView debugging only in debug builds
+            try {
+                if (BuildConfig.DEBUG) {
+                    android.webkit.WebView.setWebContentsDebuggingEnabled(true)
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "Could not access bridge.webView: ${e.message}")
-                null
+                Log.w(TAG, "Could not set WebView debugging: ${e.message}")
             }
 
-            webView?.let { wv ->
-                wv.webViewClient = ZaiWebViewClient(bridge)
-                val chromeClient = ZaiWebChromeClient(bridge)
-                zaiWebChromeClient = chromeClient
-                wv.webChromeClient = chromeClient
-
-                wv.setDownloadListener(DownloadListener { url, userAgent, contentDisposition, mimetype, contentLength ->
-                    Log.i(TAG, "Download requested: $url (mime=$mimetype, disp=$contentDisposition)")
-                    try {
-                        val request = DownloadManager.Request(Uri.parse(url))
-                        request.setNotificationVisibility(
-                            DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED
-                        )
-                        var fileName = Uri.decode(url.substringAfterLast('/', "zai-shell-download"))
-                        if (contentDisposition != null && contentDisposition.contains("filename=")) {
-                            val idx = contentDisposition.indexOf("filename=")
-                            if (idx >= 0) {
-                                val rest = contentDisposition.substring(idx + 9).trim()
-                                fileName = rest.trim('"', ' ', ';')
-                            }
+            wv.setDownloadListener(DownloadListener { url, userAgent, contentDisposition, mimetype, contentLength ->
+                Log.i(TAG, "Download requested: $url (mime=$mimetype, disp=$contentDisposition)")
+                try {
+                    val request = DownloadManager.Request(Uri.parse(url))
+                    request.setNotificationVisibility(
+                        DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED
+                    )
+                    var fileName = Uri.decode(url.substringAfterLast('/', "zai-shell-download"))
+                    if (contentDisposition != null && contentDisposition.contains("filename=")) {
+                        val idx = contentDisposition.indexOf("filename=")
+                        if (idx >= 0) {
+                            val rest = contentDisposition.substring(idx + 9).trim()
+                            fileName = rest.trim('"', ' ', ';')
                         }
-                        request.setDestinationInExternalPublicDir(
-                            Environment.DIRECTORY_DOWNLOADS, fileName
-                        )
-                        request.allowScanningByMediaScanner()
-                        request.setAllowedNetworkTypes(
-                            DownloadManager.Request.NETWORK_WIFI or DownloadManager.Request.NETWORK_MOBILE
-                        )
-                        if (mimetype != null) {
-                            request.setMimeType(mimetype)
-                        }
-                        val dm = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-                        dm.enqueue(request)
-                        Log.i(TAG, "Download enqueued: $fileName")
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Download failed: ${e.message}", e)
                     }
-                })
+                    request.setDestinationInExternalPublicDir(
+                        Environment.DIRECTORY_DOWNLOADS, fileName
+                    )
+                    request.allowScanningByMediaScanner()
+                    request.setAllowedNetworkTypes(
+                        DownloadManager.Request.NETWORK_WIFI or DownloadManager.Request.NETWORK_MOBILE
+                    )
+                    if (mimetype != null) {
+                        request.setMimeType(mimetype)
+                    }
+                    // HIGH #17: attach WebView cookies to authenticated downloads
+                    try {
+                        val cookies = android.webkit.CookieManager.getInstance().getCookie(url)
+                        if (cookies != null) {
+                            request.addRequestHeader("Cookie", cookies)
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Could not attach cookies: ${e.message}")
+                    }
+                    val dm = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+                    dm.enqueue(request)
+                    Log.i(TAG, "Download enqueued: $fileName")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Download failed: ${e.message}", e)
+                }
+            })
 
-                val settings = wv.settings
-                settings.javaScriptCanOpenWindowsAutomatically = false
-                settings.setSupportMultipleWindows(false)
+            val settings = wv.settings
+            settings.javaScriptCanOpenWindowsAutomatically = false
+            settings.setSupportMultipleWindows(false)
 
-                Log.i(TAG, "Custom WebViewClient + WebChromeClient + DownloadListener hooked")
-            } ?: run {
-                webView?.post { hookWebViewClient() }
-                Log.w(TAG, "WebView not yet available, will retry")
-            }
+            Log.i(TAG, "Custom WebViewClient + WebChromeClient + DownloadListener hooked")
         } catch (e: Exception) {
             Log.e(TAG, "Error hooking WebViewClient: ${e.message}", e)
         }
@@ -208,6 +235,8 @@ class MainActivity : BridgeActivity() {
     }
 
     override fun onDestroy() {
+        // HIGH #18: cancel pending file chooser callback to avoid WebView hang
+        zaiWebChromeClient?.handleFileChooserResult(android.app.Activity.RESULT_CANCELED, null)
         super.onDestroy()
     }
 }

@@ -9,12 +9,19 @@ build/
 
 # Android
 android/app/build/
+android/build/
 android/.gradle/
 android/local.properties
 android/captures/
 android/app/release.keystore
 *.keystore
+*.jks
 !debug.keystore
+android/.idea/
+
+# Build artifacts
+*.apk
+*.aab
 
 # IDE
 .idea/
@@ -42,3 +49,6 @@ android/capacitor-cordova-android-plugins/
 # android/gradlew
 # android/gradlew.bat
 # android/gradle/wrapper/gradle-wrapper.jar
+
+# Lock files (regenerated)
+# Keep package-lock.json tracked for npm ci

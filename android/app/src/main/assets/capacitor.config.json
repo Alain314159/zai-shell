@@ -4,13 +4,15 @@
   "webDir": "dist",
   "server": {
     "url": "https://chat.z.ai",
-    "cleartext": true,
     "androidScheme": "https"
   },
   "android": {
     "allowMixedContent": false,
-    "webContentsDebuggingEnabled": true,
-    "backgroundColor": "#0a0a0a"
+    "captureInput": true,
+    "webContentsDebuggingEnabled": false,
+    "backgroundColor": "#0a0a0a",
+    "initialScale": 1,
+    "scrollEnabled": true
   },
   "plugins": {
     "SplashScreen": {
@@ -19,6 +21,9 @@
       "androidSplashResourceName": "splash",
       "androidScaleType": "CENTER_CROP",
       "showSpinner": false,
+      "androidSpinnerStyle": "large",
+      "iosSpinnerStyle": "small",
+      "spinnerColor": "#3b82f6",
       "splashFullScreen": true,
       "splashImmersive": true
     },
@@ -36,6 +41,7 @@
       "resize": "body",
       "style": "DARK",
       "resizeOnFullScreen": true
-    }
+    },
+    "KeepAwake": {}
   }
 }

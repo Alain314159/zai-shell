@@ -117,7 +117,8 @@ class ZaiShellPlugin : Plugin() {
     fun getAppInfo(call: PluginCall) {
         try {
             val info = JSObject()
-            info.put("version", "1.0.0")
+            // MEDIUM #21: read version from BuildConfig instead of hardcoded
+            info.put("version", com.zai.shell.BuildConfig.VERSION_NAME)
             info.put("package", context.packageName)
             info.put("androidVersion", android.os.Build.VERSION.RELEASE)
             info.put("sdk", android.os.Build.VERSION.SDK_INT)

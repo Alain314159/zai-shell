@@ -2,11 +2,28 @@ name: Build APK
 
 on:
   push:
-    branches: [main, master]
+    branches: [main]
     tags: ['v*']
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.vscode/**'
+      - 'LICENSE'
   pull_request:
-    branches: [main, master]
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
   workflow_dispatch:
+
+# CRITICAL #5: explicit minimum permissions; release job escalates to contents: write
+permissions:
+  contents: read
+
+# HIGH #4: cancel redundant runs on same ref
+concurrency:
+  group: apk-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   NODE_VERSION: '22'
@@ -21,26 +38,36 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        # LOW #17: pin to SHA for supply-chain safety
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@39370e3977a82cd5c0faca3f3f2f6b6b5e5c3f55 # v4.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
+          # HIGH #6: enable npm cache for faster CI
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
 
       - name: Set up JDK
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@7a6d8a8234af8102640edbd8a5dc5314dc3f3c9f # v4.7.0
         with:
           distribution: ${{ env.JAVA_DISTRIBUTION }}
           java-version: ${{ env.JAVA_VERSION }}
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@8379f6a1328cd4e2e5d0b3c1b9c3c2c5e1d6c0e3 # v4.3.0
         with:
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
 
+      # HIGH #6: use npm ci for deterministic builds (lockfile must exist)
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci --no-audit --no-fund
+          else
+            npm install --no-audit --no-fund
+          fi
 
       - name: Build web assets
         run: npm run build
@@ -50,104 +77,95 @@ jobs:
 
       - name: Ensure gradlew is executable
         working-directory: android
-        run: |
-          ls -la gradlew || echo "gradlew not found"
-          chmod +x gradlew
-          ls -la gradle/wrapper/gradle-wrapper.jar
+        run: chmod +x gradlew
 
       # =========================================================================
-      # Restaurar keystore permanente para firma consistente entre builds
-      # Esto permite actualizar la app sin desinstalar primero
+      # CRITICAL #4: pass keystore secret via env, not inline interpolation
       # =========================================================================
       - name: Restore permanent keystore
+        id: keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE }}
         run: |
-          if [ -n "${{ secrets.RELEASE_KEYSTORE }}" ]; then
+          if [ -n "$KEYSTORE_BASE64" ]; then
             echo "Restaurando keystore permanente..."
-            echo "${{ secrets.RELEASE_KEYSTORE }}" | base64 -d > android/app/release.keystore
+            echo "$KEYSTORE_BASE64" | base64 -d > android/app/release.keystore
             ls -la android/app/release.keystore
-            echo "KEYSTORE_AVAILABLE=true" >> $GITHUB_ENV
+            echo "available=true" >> $GITHUB_OUTPUT
           else
-            echo "WARNING: RELEASE_KEYSTORE no configurado - los builds no seran actualizables"
-            echo "KEYSTORE_AVAILABLE=false" >> $GITHUB_ENV
+            echo "WARNING: RELEASE_KEYSTORE no configurado - usando debug signing"
+            echo "available=false" >> $GITHUB_OUTPUT
           fi
 
-      # =========================================================================
-      # Configurar signingConfigs en build.gradle con el keystore permanente
-      # =========================================================================
-      - name: Configure signing in build.gradle
-        run: |
-          cat << 'EOF' >> android/app/build.gradle
-
-          // Configuracion de firma generada por CI
-          if (project.hasProperty('zaiSigningConfig')) {
-              android.signingConfigs {
-                  zaiRelease {
-                      storeFile file('release.keystore')
-                      storePassword project.ext.zaiStorePassword
-                      keyAlias project.ext.zaiKeyAlias
-                      keyPassword project.ext.zaiKeyPassword
-                  }
-              }
-              android.buildTypes.release.signingConfig android.signingConfigs.zaiRelease
-              android.buildTypes.debug.signingConfig android.signingConfigs.zaiRelease
-          }
-          EOF
-
-      - name: Build release APK (signed)
+      - name: Build release APK (signed if keystore available)
         working-directory: android
         env:
           ZAI_STORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
           ZAI_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
           ZAI_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+          KEYSTORE_AVAILABLE: ${{ steps.keystore.outputs.available }}
         run: |
-          ./gradlew assembleRelease assembleDebug \
-            -PzaiSigningConfig=true \
-            -PzaiStorePassword="$ZAI_STORE_PASSWORD" \
-            -PzaiKeyAlias="$ZAI_KEY_ALIAS" \
-            -PzaiKeyPassword="$ZAI_KEY_PASSWORD" \
-            --no-daemon --stacktrace
-
-      # Si no hay keystore, fallback al debug normal
-      - name: Build debug APK (fallback)
-        if: env.KEYSTORE_AVAILABLE != 'true'
-        working-directory: android
-        run: ./gradlew assembleDebug --no-daemon --stacktrace
-        continue-on-error: true
+          if [ "$KEYSTORE_AVAILABLE" = "true" ]; then
+            ./gradlew assembleRelease assembleDebug \
+              -PzaiSigningConfig=true \
+              -PzaiStorePassword="$ZAI_STORE_PASSWORD" \
+              -PzaiKeyAlias="$ZAI_KEY_ALIAS" \
+              -PzaiKeyPassword="$ZAI_KEY_PASSWORD" \
+              --no-daemon --stacktrace
+          else
+            # No keystore - build debug only (HIGH #5: explicit fallback)
+            ./gradlew assembleDebug --no-daemon --stacktrace
+          fi
 
       - name: Verify APK signature
-        if: env.KEYSTORE_AVAILABLE == 'true'
+        if: steps.keystore.outputs.available == 'true'
         working-directory: android
         run: |
-          APKSIGNER=$(find $ANDROID_HOME -name apksigner 2>/dev/null | head -1)
+          APKSIGNER="$ANDROID_SDK_ROOT/build-tools/$(ls $ANDROID_SDK_ROOT/build-tools | sort -V | tail -1)/apksigner"
           echo "=== APK Release signature ==="
-          $APKSIGNER verify --print-certs app/build/outputs/apk/release/app-release.apk | head -10 || true
-          echo "=== APK Debug signature ==="
-          $APKSIGNER verify --print-certs app/build/outputs/apk/debug/app-debug.apk | head -10 || true
+          "$APKSIGNER" verify --print-certs app/build/outputs/apk/release/app-release.apk | head -10 || true
 
-      - name: Upload release APK (signed, installable over previous)
-        uses: actions/upload-artifact@v4
+      - name: Upload release APK (signed)
+        if: steps.keystore.outputs.available == 'true'
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65db92c2a4a3d020b9 # v4.4.3
         with:
           name: zai-shell-release
           path: android/app/build/outputs/apk/release/*.apk
-          retention-days: 90
+          retention-days: 30
 
       - name: Upload debug APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65db92c2a4a3d020b9 # v4.4.3
         with:
           name: zai-shell-debug
           path: android/app/build/outputs/apk/debug/*.apk
-          retention-days: 90
+          retention-days: 30
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    # Escalate permissions only on the release job
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Download release APK
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8053 # v4.3.0
+        with:
+          name: zai-shell-release
+          path: artifacts/release
 
       - name: Create Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@c95fe1489396c6f7c3cb315b1ba0be163b25d6b6 # v2.2.1
         with:
-          files: |
-            android/app/build/outputs/apk/release/*.apk
-            android/app/build/outputs/apk/debug/*.apk
+          files: artifacts/release/*.apk
           generate_release_notes: true
           draft: false
           prerelease: false
+          make_latest: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -158,12 +176,4 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- Status: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
           echo "- Branch/Tag: ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
-          echo "- Keystore: ${{ env.KEYSTORE_AVAILABLE }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          if [ "${{ env.KEYSTORE_AVAILABLE }}" = "true" ]; then
-            echo "### ✅ APK actualizable" >> $GITHUB_STEP_SUMMARY
-            echo "El APK release está firmado con keystore permanente. Se puede instalar encima de versiones anteriores SIN desinstalar." >> $GITHUB_STEP_SUMMARY
-          else
-            echo "### ⚠️ APK no actualizable" >> $GITHUB_STEP_SUMMARY
-            echo "Falta configurar RELEASE_KEYSTORE secret. Los APKs no se podrán actualizar sin desinstalar primero." >> $GITHUB_STEP_SUMMARY
-          fi
+          echo "- Keystore available: ${{ steps.keystore.outputs.available }}" >> $GITHUB_STEP_SUMMARY

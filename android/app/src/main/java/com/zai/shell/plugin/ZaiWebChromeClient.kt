@@ -69,8 +69,16 @@ class ZaiWebChromeClient(private val bridge: Bridge) : WebChromeClient() {
                 intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
             }
 
+            // HIGH #19: null check on activity to avoid NPE
+            val act = bridge.activity
+            if (act == null) {
+                Log.e(TAG, "Activity is null, cannot launch file chooser")
+                filePathCallback = null
+                return false
+            }
+
             Log.i(TAG, "Launching file chooser")
-            bridge.activity.startActivityForResult(intent, FILE_CHOOSER_REQUEST_CODE)
+            act.startActivityForResult(intent, FILE_CHOOSER_REQUEST_CODE)
             return true
         } catch (e: Exception) {
             Log.e(TAG, "Error launching file chooser: ${e.message}", e)
@@ -95,8 +103,9 @@ class ZaiWebChromeClient(private val bridge: Bridge) : WebChromeClient() {
         val results: Array<Uri>? = when {
             data.data != null -> arrayOf(data.data!!)
             data.clipData != null -> {
-                val count = data.clipData!!.itemCount
-                Array(count) { i -> data.clipData!!.getItemAt(i).uri }
+                val clip = data.clipData
+                val count = clip!!.itemCount
+                Array(count) { i -> clip!!.getItemAt(i).uri }
             }
             else -> null
         }

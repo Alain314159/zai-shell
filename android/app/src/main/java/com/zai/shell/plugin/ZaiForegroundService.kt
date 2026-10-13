@@ -44,10 +44,10 @@ class ZaiForegroundService : Service() {
         }
 
         fun stop(context: Context) {
+            // HIGH #14: use stopService instead of startService (blocked on Android 8+ background)
             val intent = Intent(context, ZaiForegroundService::class.java)
-            intent.action = "STOP"
             try {
-                context.startService(intent)
+                context.stopService(intent)
             } catch (e: Exception) {
                 Log.e(TAG, "Error stopping: ${e.message}")
             }
@@ -63,14 +63,18 @@ class ZaiForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == "STOP") {
-            releaseWakeLock()
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
-            return START_NOT_STICKY
-        }
         val notification = buildNotification()
-        startForeground(NOTIFICATION_ID, notification)
+        // HIGH #11: Android 14+ requires foregroundServiceType in startForeground call
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) { // API 34
+            try {
+                startForeground(NOTIFICATION_ID, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            } catch (e: Exception) {
+                Log.e(TAG, "startForeground with type failed, falling back: ${e.message}")
+                startForeground(NOTIFICATION_ID, notification)
+            }
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
         return START_STICKY
     }
 
@@ -118,8 +122,10 @@ class ZaiForegroundService : Service() {
                 "ZaiShell::ForegroundWakeLock"
             )
             wakeLock?.setReferenceCounted(false)
-            wakeLock?.acquire(10 * 60 * 1000L) // 10 min, se renueva
-            Log.i(TAG, "Wake lock acquired")
+            // CRITICAL #13: acquire without timeout - the service runs forever while app is alive
+            // (was 10min, never renewed despite the comment)
+            wakeLock?.acquire()
+            Log.i(TAG, "Wake lock acquired (no timeout)")
         } catch (e: Exception) {
             Log.e(TAG, "Error acquiring wake lock: ${e.message}")
         }
