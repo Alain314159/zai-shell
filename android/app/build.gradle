@@ -5,6 +5,11 @@ android {
     namespace "com.zai.shell"
     compileSdk 36
 
+    // Ensure BuildConfig is generated
+    buildFeatures {
+        buildConfig = true
+    }
+
     defaultConfig {
         applicationId "com.zai.shell"
         minSdk 24
