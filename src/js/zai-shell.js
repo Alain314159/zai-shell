@@ -1218,7 +1218,29 @@
       btn.textContent = isOn ? 'ON' : 'On/Off';
       btn.classList.toggle('danger', isOn);
     }
+    // Mostrar/ocultar boton X flotante para desactivar rapidamente
+    if (isOn) {
+      showFocusExitButton();
+    } else {
+      hideFocusExitButton();
+    }
     toast(isOn ? 'Modo Solo Conversación activado' : 'Modo normal');
+  }
+
+  function showFocusExitButton() {
+    if (document.getElementById('zai-focus-exit')) return;
+    const btn = document.createElement('button');
+    btn.id = 'zai-focus-exit';
+    btn.textContent = '✕';
+    btn.title = 'Salir del modo solo conversación';
+    btn.style.cssText = 'position:fixed;top:8px;right:8px;width:32px;height:32px;border-radius:16px;background:rgba(220,38,38,0.95);color:white;border:none;font-size:16px;cursor:pointer;z-index:999999;box-shadow:0 2px 8px rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;';
+    btn.addEventListener('click', toggleFocusMode);
+    document.body.appendChild(btn);
+  }
+
+  function hideFocusExitButton() {
+    const btn = document.getElementById('zai-focus-exit');
+    if (btn) btn.remove();
   }
 
   // ====================================================================
@@ -1611,6 +1633,101 @@
   }
 
   // ====================================================================
+  // 19. FULLSCREEN TERMINAL BLOCKER - detecta y cierra elementos que
+  // intentan ocupar toda la pantalla (terminales de z.ai, sandboxes, etc)
+  // ====================================================================
+  function setupFullscreenBlocker() {
+    // Dominios permitidos para iframes (z.ai y sus subdominios)
+    const ALLOWED_IFRAME_DOMAINS = ['z.ai', 'chat.z.ai', 'bigmodel.cn', 'zhipuai.cn', 'chatglm.site', 'zcode.z.ai'];
+
+    function isAllowedIframeSrc(src) {
+      if (!src) return true; // about:blank o sin src = ok
+      try {
+        const url = new URL(src, location.href);
+        const host = url.hostname;
+        return ALLOWED_IFRAME_DOMAINS.some(d => host === d || host.endsWith('.' + d));
+      } catch (e) {
+        return true; // si no se puede parsear, dejar pasar
+      }
+    }
+
+    // Observer para detectar iframes nuevos
+    const iframeObserver = new MutationObserver((mutations) => {
+      for (const mut of mutations) {
+        for (const node of mut.addedNodes) {
+          if (node.nodeType !== 1) continue;
+          // Detectar iframes
+          if (node.tagName === 'IFRAME' || (node.querySelector && node.querySelector('iframe'))) {
+            const iframes = node.tagName === 'IFRAME' ? [node] : Array.from(node.querySelectorAll('iframe'));
+            for (const iframe of iframes) {
+              const src = iframe.src || iframe.getAttribute('src') || '';
+              if (!isAllowedIframeSrc(src)) {
+                log('Bloqueando iframe de dominio externo:', src.slice(0, 80));
+                iframe.remove();
+                toast('Terminal externo bloqueado');
+                return;
+              }
+              // Si el iframe es de z.ai pero ocupa toda la pantalla, anadir boton de cierre
+              setTimeout(() => {
+                checkFullscreenElement(iframe);
+              }, 100);
+            }
+          }
+          // Detectar elementos fullscreen (terminales internos de z.ai)
+          checkFullscreenElement(node);
+        }
+      }
+    });
+
+    function checkFullscreenElement(el) {
+      if (!el || !el.style) return;
+      const style = window.getComputedStyle(el);
+      const isFixed = style.position === 'fixed';
+      const isFullScreen = isFixed && (
+        (style.inset === '0' || (style.top === '0px' && style.left === '0px' && style.right === '0px' && style.bottom === '0px')) ||
+        (el.offsetWidth >= window.innerWidth * 0.95 && el.offsetHeight >= window.innerHeight * 0.9)
+      );
+      if (isFullScreen && el.id !== 'zai-shell-fab' && el.id !== 'zai-shell-panel' &&
+          el.id !== 'zai-shell-pull-indicator' && el.id !== 'zai-focus-exit' &&
+          el.id !== 'zai-shell-search' && el.id !== 'zai-shell-history-panel' &&
+          el.id !== 'zai-shell-toast' && !el.dataset.zaiShellManaged) {
+        // Es un elemento fullscreen que no es nuestro - anadir boton de cierre
+        if (!el.querySelector('.zai-shell-close-overlay')) {
+          addCloseButton(el);
+        }
+      }
+    }
+
+    function addCloseButton(target) {
+      const btn = document.createElement('button');
+      btn.className = 'zai-shell-close-overlay';
+      btn.textContent = '✕';
+      btn.title = 'Cerrar (ZaiShell)';
+      btn.style.cssText = 'position:fixed;top:8px;right:8px;width:36px;height:36px;border-radius:18px;background:rgba(220,38,38,0.95);color:white;border:none;font-size:18px;cursor:pointer;z-index:2147483647;box-shadow:0 2px 8px rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;font-family:system-ui;';
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        log('Cerrando elemento fullscreen');
+        target.remove();
+        toast('Cerrado');
+      });
+      document.body.appendChild(btn);
+      // Auto-remover el boton si el target desaparece
+      const checker = setInterval(() => {
+        if (!target.parentNode) {
+          btn.remove();
+          clearInterval(checker);
+        }
+      }, 1000);
+      // Auto-remover despues de 60s si no se cierra
+      setTimeout(() => { if (btn.parentNode) { btn.remove(); clearInterval(checker); } }, 60000);
+    }
+
+    iframeObserver.observe(document.body, { childList: true, subtree: true });
+    log('Fullscreen blocker installed');
+  }
+
+  // ====================================================================
   // BOOTSTRAP
   // ====================================================================
   function boot() {
@@ -1625,6 +1742,7 @@
     installSseInterceptor();
     setupPullToRefresh();
     setupOutgoingPersistence();
+    setupFullscreenBlocker();
     // Restaurar tamano de fuente guardado
     try {
       const saved = parseFloat(localStorage.getItem('zai-shell-fontscale') || '1');

@@ -22,6 +22,7 @@ import com.zai.shell.plugin.ZaiWebViewClient
 class MainActivity : BridgeActivity() {
     private val TAG = "ZaiShellMainActivity"
     private var pendingWidgetPrompt: String? = null
+    private var zaiWebChromeClient: ZaiWebChromeClient? = null
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -139,7 +140,9 @@ class MainActivity : BridgeActivity() {
 
             webView?.let { wv ->
                 wv.webViewClient = ZaiWebViewClient(bridge)
-                wv.webChromeClient = ZaiWebChromeClient(bridge)
+                val chromeClient = ZaiWebChromeClient(bridge)
+                zaiWebChromeClient = chromeClient
+                wv.webChromeClient = chromeClient
 
                 wv.setDownloadListener(DownloadListener { url, userAgent, contentDisposition, mimetype, contentLength ->
                     Log.i(TAG, "Download requested: $url (mime=$mimetype, disp=$contentDisposition)")
@@ -191,6 +194,17 @@ class MainActivity : BridgeActivity() {
     override fun onResume() {
         super.onResume()
         ZaiForegroundService.start(this)
+    }
+
+    /**
+     * Maneja el resultado del file chooser para que <input type="file">
+     * funcione en el WebView (subir fotos/archivos a z.ai)
+     */
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == ZaiWebChromeClient.FILE_CHOOSER_REQUEST_CODE) {
+            zaiWebChromeClient?.handleFileChooserResult(resultCode, data)
+        }
     }
 
     override fun onDestroy() {

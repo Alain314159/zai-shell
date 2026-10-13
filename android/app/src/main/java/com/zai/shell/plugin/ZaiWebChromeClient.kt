@@ -1,42 +1,34 @@
 package com.zai.shell.plugin
 
-import android.app.DownloadManager
-import android.content.Context
+import android.app.Activity
+import android.content.Intent
 import android.net.Uri
-import android.os.Environment
 import android.util.Log
 import android.webkit.WebChromeClient
 import android.webkit.WebView
+import android.webkit.ValueCallback
 import com.getcapacitor.Bridge
 
 /**
- * ZaiWebChromeClient - controla popups, nuevas ventanas y descargas
- *
- *  - Bloquea window.open() y target=_blank (evita que documentos PDFs, ventanas de codigo, etc.
- *    reemplacen la interfaz de chat)
- *  - Las descargas (PDFs, imagenes) se mandan al DownloadManager de Android
- *  - Los console.log del JS se redirigen a Logcat para debug
+ * ZaiWebChromeClient - controla popups, nuevas ventanas, descargas y file chooser
  */
 class ZaiWebChromeClient(private val bridge: Bridge) : WebChromeClient() {
 
     companion object {
         private const val TAG = "ZaiWebChromeClient"
+        const val FILE_CHOOSER_REQUEST_CODE = 51426
     }
+
+    private var filePathCallback: ValueCallback<Array<Uri>>? = null
 
     /**
      * Bloquea la creacion de nuevas ventanas.
-     * Esto evita:
-     *  - Documentos que se abren solos (PDFs, imagenes en nueva pestaña)
-     *  - "Terminal" o paneles de codigo que z.ai abre en popups
-     *  - Cualquier window.open() o target=_blank
      */
     override fun onCreateWindow(
         view: WebView?, isDialog: Boolean, isUserGesture: Boolean, resultMsg: android.os.Message?
     ): Boolean {
         Log.i(TAG, "Bloqueado onCreateWindow (dialog=$isDialog, userGesture=$isUserGesture)")
-        // Forzar a que el link se abra en el mismo WebView
         view?.context?.let { ctx ->
-            // Si el WebView tiene un hitTestResult podemos ver la URL
             val hitTest = view.hitTestResult
             val url = hitTest?.extra
             if (url != null && url.startsWith("http")) {
@@ -44,13 +36,73 @@ class ZaiWebChromeClient(private val bridge: Bridge) : WebChromeClient() {
                 view.loadUrl(url)
             }
         }
-        // Devolver false bloquea la nueva ventana
         return false
     }
 
     override fun onCloseWindow(window: WebView?) {
         Log.i(TAG, "onCloseWindow")
         super.onCloseWindow(window)
+    }
+
+    /**
+     * FILE CHOOSER - permite que <input type="file"> funcione en el WebView.
+     * Sin esto, el usuario no puede subir fotos/archivos a z.ai desde la app.
+     */
+    override fun onShowFileChooser(
+        webView: WebView?,
+        callback: ValueCallback<Array<Uri>>?,
+        params: FileChooserParams?
+    ): Boolean {
+        // Cancelar callback previo si existe
+        filePathCallback?.onReceiveValue(null)
+        filePathCallback = callback
+
+        try {
+            val intent = params?.createIntent() ?: Intent(Intent.ACTION_GET_CONTENT).apply {
+                type = "*/*"
+                addCategory(Intent.CATEGORY_OPENABLE)
+            }
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
+            // Permitir seleccionar multiples archivos si z.ai lo pide
+            if (params?.mode == FileChooserParams.MODE_OPEN_MULTIPLE) {
+                intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+            }
+
+            Log.i(TAG, "Launching file chooser")
+            bridge.activity.startActivityForResult(intent, FILE_CHOOSER_REQUEST_CODE)
+            return true
+        } catch (e: Exception) {
+            Log.e(TAG, "Error launching file chooser: ${e.message}", e)
+            filePathCallback = null
+            return false
+        }
+    }
+
+    /**
+     * Llamado desde MainActivity.onActivityResult para entregar el resultado
+     * del file chooser al WebView.
+     */
+    fun handleFileChooserResult(resultCode: Int, data: Intent?) {
+        val callback = filePathCallback ?: return
+        filePathCallback = null
+
+        if (resultCode != Activity.RESULT_OK || data == null) {
+            callback.onReceiveValue(null)
+            return
+        }
+
+        val results: Array<Uri>? = when {
+            data.data != null -> arrayOf(data.data!!)
+            data.clipData != null -> {
+                val count = data.clipData!!.itemCount
+                Array(count) { i -> data.clipData!!.getItemAt(i).uri }
+            }
+            else -> null
+        }
+
+        Log.i(TAG, "File chooser result: ${results?.size ?: 0} files")
+        callback.onReceiveValue(results)
     }
 
     /**
