@@ -793,6 +793,67 @@
   }
 
   // ====================================================================
+  // 12. SESSION BACKUP - auto-login persistente entre reinstalaciones
+  // ====================================================================
+  async function startSessionBackup() {
+    if (!window.Capacitor?.Plugins?.ZaiCookieBackup) return;
+
+    // 1. Cargar backup de cookies al arranque si no hay sesion activa
+    try {
+      const stored = window.localStorage.getItem('zai-shell-has-session');
+      if (stored !== '1') {
+        // No hay sesion - intentar restaurar desde backup
+        const backup = await window.Capacitor.Plugins.ZaiCookieBackup.loadCookieBackup();
+        if (backup.cookies && backup.cookies.length > 0) {
+          log('Restaurando cookies desde backup (' + backup.cookies.length + ' chars)');
+          await window.Capacitor.Plugins.ZaiCookieBackup.importCookies({
+            zai: backup.cookies,
+            zaiAlt: ''
+          });
+          // Recargar para aplicar cookies
+          setTimeout(() => location.reload(), 500);
+          return;
+        }
+      }
+    } catch (e) {
+      log('Session restore failed', e);
+    }
+
+    // 2. Guardar cookies periodicamente (cada 5 min)
+    setInterval(async () => {
+      try {
+        const result = await window.Capacitor.Plugins.ZaiCookieBackup.exportCookies();
+        if (result.zai && result.zai.length > 50) {
+          // Solo guardar si hay sesion real (cookies > 50 chars)
+          await window.Capacitor.Plugins.ZaiCookieBackup.saveCookieBackup({
+            cookies: result.zai
+          });
+          window.localStorage.setItem('zai-shell-has-session', '1');
+          log('Cookies guardadas como backup (' + result.zai.length + ' chars)');
+        }
+      } catch (e) {}
+    }, 5 * 60 * 1000);
+
+    // 3. Guardar al detectar login (cuando aparecen cookies nuevas)
+    let lastCookieCheck = '';
+    setInterval(async () => {
+      try {
+        const current = document.cookie || '';
+        if (current.length > 100 && current !== lastCookieCheck) {
+          lastCookieCheck = current;
+          const result = await window.Capacitor.Plugins.ZaiCookieBackup.exportCookies();
+          if (result.zai && result.zai.length > 50) {
+            await window.Capacitor.Plugins.ZaiCookieBackup.saveCookieBackup({ cookies: result.zai });
+            window.localStorage.setItem('zai-shell-has-session', '1');
+          }
+        }
+      } catch (e) {}
+    }, 10 * 1000);
+
+    log('Session backup started');
+  }
+
+  // ====================================================================
   // BOOTSTRAP
   // ====================================================================
   function boot() {
@@ -803,6 +864,7 @@
     watchResponseState();
     createFAB();
     startKeyboardFix();
+    startSessionBackup();
     // Restaurar tamano de fuente guardado
     try {
       const saved = parseFloat(localStorage.getItem('zai-shell-fontscale') || '1');
