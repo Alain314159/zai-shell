@@ -1,12 +1,18 @@
 package com.zai.shell
 
 import android.annotation.SuppressLint
+import android.app.DownloadManager
+import android.content.Context
+import android.net.Uri
 import android.os.Bundle
+import android.os.Environment
 import android.util.Log
 import android.webkit.WebView
+import android.webkit.DownloadListener
 import com.getcapacitor.BridgeActivity
 import com.zai.shell.plugin.ZaiForegroundService
 import com.zai.shell.plugin.ZaiShellPlugin
+import com.zai.shell.plugin.ZaiWebChromeClient
 import com.zai.shell.plugin.ZaiWebViewClient
 
 class MainActivity : BridgeActivity() {
@@ -14,25 +20,17 @@ class MainActivity : BridgeActivity() {
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
-        // Registrar el plugin nativo ANTES de super.onCreate
         registerPlugin(ZaiShellPlugin::class.java)
         super.onCreate(savedInstanceState)
 
-        // Arrancar el foreground service para que Android no mate la app
         ZaiForegroundService.start(this)
         Log.i(TAG, "Foreground service started from MainActivity")
 
-        // Hook del WebViewClient custom para inyectar JS cuando la pagina cargue
         hookWebViewClient()
     }
 
-    /**
-     * Reemplaza el WebViewClient del WebView de Capacitor por el nuestro
-     * para poder inyectar JS en la URL remota (chat.z.ai).
-     */
     private fun hookWebViewClient() {
         try {
-            // El webView esta accesible via bridge despues de onCreate
             val webView: WebView? = try {
                 this.javaClass.superclass.getDeclaredField("bridge").let { f ->
                     f.isAccessible = true
@@ -43,18 +41,62 @@ class MainActivity : BridgeActivity() {
                     }
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "Could not access bridge.webView via reflection: ${e.message}")
+                Log.w(TAG, "Could not access bridge.webView: ${e.message}")
                 null
             }
 
             webView?.let { wv ->
+                // Hook del WebViewClient custom
                 wv.webViewClient = ZaiWebViewClient(bridge)
-                Log.i(TAG, "Custom WebViewClient hooked successfully")
+
+                // Hook del WebChromeClient custom (bloquea popups)
+                wv.webChromeClient = ZaiWebChromeClient(bridge)
+
+                // DownloadListener - captura descargas que no son interceptadas por shouldOverrideUrlLoading
+                wv.setDownloadListener(DownloadListener { url, userAgent, contentDisposition, mimetype, contentLength ->
+                    Log.i(TAG, "Download requested: $url (mime=$mimetype, disp=$contentDisposition)")
+                    try {
+                        val request = DownloadManager.Request(Uri.parse(url))
+                        request.setNotificationVisibility(
+                            DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED
+                        )
+                        // Extraer nombre del archivo
+                        var fileName = Uri.decode(url.substringAfterLast('/', "zai-shell-download"))
+                        if (contentDisposition != null && contentDisposition.contains("filename=")) {
+                            val idx = contentDisposition.indexOf("filename=")
+                            if (idx >= 0) {
+                                val rest = contentDisposition.substring(idx + 9).trim()
+                                fileName = rest.trim('"', ' ', ';')
+                            }
+                        }
+                        request.setDestinationInExternalPublicDir(
+                            Environment.DIRECTORY_DOWNLOADS, fileName
+                        )
+                        request.allowScanningByMediaScanner()
+                        request.setAllowedNetworkTypes(
+                            DownloadManager.Request.NETWORK_WIFI or DownloadManager.Request.NETWORK_MOBILE
+                        )
+                        if (mimetype != null) {
+                            request.setMimeType(mimetype)
+                        }
+
+                        val dm = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+                        dm.enqueue(request)
+                        Log.i(TAG, "Download enqueued: $fileName")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Download failed: ${e.message}", e)
+                    }
+                })
+
+                // Configurar el WebView para no soportar multi-ventanas (bloquea popups a nivel nativo)
+                val settings = wv.settings
+                settings.javaScriptCanOpenWindowsAutomatically = false
+                settings.setSupportMultipleWindows(false)
+
+                Log.i(TAG, "Custom WebViewClient + WebChromeClient + DownloadListener hooked")
             } ?: run {
                 // Reintentar en el proximo loop del hilo principal
-                webView?.post {
-                    hookWebViewClient()
-                }
+                webView?.post { hookWebViewClient() }
                 Log.w(TAG, "WebView not yet available, will retry")
             }
         } catch (e: Exception) {
@@ -64,13 +106,10 @@ class MainActivity : BridgeActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Re-asegurar el foreground service si fue detenido
         ZaiForegroundService.start(this)
     }
 
     override fun onDestroy() {
-        // No detenemos el foreground service en onDestroy para que sobreviva
-        // a cambios de orientacion. Se detiene solo si el usuario lo pide.
         super.onDestroy()
     }
 }

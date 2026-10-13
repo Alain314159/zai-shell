@@ -69,6 +69,95 @@
       opacity: 0.5;
     }
 
+    /* FIX: Numeros de listas cortados (padding-left insuficiente) */
+    ol, ul {
+      padding-left: 1.75rem !important;
+      margin-left: 0.25rem !important;
+    }
+    ol li, ul li {
+      overflow: visible !important;
+      padding-left: 0.25rem !important;
+    }
+    /* Asegurar que el marker de lista no se corte */
+    li::marker {
+      unicode-bidi: isolate !important;
+    }
+    /* Listas dentro de bloques de codigo tambien */
+    pre ol, pre ul, .md-code-block ol, .md-code-block ul {
+      padding-left: 2.5rem !important;
+    }
+
+    /* FIX: Texto truncado en general - asegurar word-wrap correcto */
+    [class*="markdown"] p,
+    [class*="markdown"] li,
+    [class*="message-content"] p,
+    [class*="message-content"] li {
+      overflow-wrap: break-word !important;
+      word-wrap: break-word !important;
+      hyphens: auto !important;
+    }
+
+    /* UI: Mas espacio en moviles */
+    @media (max-width: 768px) {
+      [class*="markdown"] {
+        font-size: 15px !important;
+        line-height: 1.6 !important;
+      }
+      [class*="markdown"] p {
+        margin: 0.6em 0 !important;
+      }
+      [class*="markdown"] h1,
+      [class*="markdown"] h2,
+      [class*="markdown"] h3 {
+        margin-top: 1em !important;
+        margin-bottom: 0.4em !important;
+      }
+      [class*="markdown"] pre {
+        margin: 0.6em 0 !important;
+        padding: 0.75em !important;
+        border-radius: 8px !important;
+      }
+      [class*="markdown"] code {
+        font-size: 13px !important;
+      }
+      [class*="markdown"] blockquote {
+        margin-left: 0 !important;
+        padding-left: 0.75em !important;
+        border-left: 3px solid #3b82f6 !important;
+      }
+    }
+
+    /* UI: Scrollbar mas gruesa y visible en movil */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.2);
+      border-radius: 3px;
+    }
+    ::-webkit-scrollbar-thumb:active {
+      background: rgba(59, 130, 246, 0.6);
+    }
+
+    /* UI: Botones mas grandes y tappable en movil */
+    @media (max-width: 768px) {
+      button, [role="button"] {
+        min-height: 36px;
+        min-width: 36px;
+      }
+    }
+
+    /* UI: Modo OLED negro puro (activable via FAB) */
+    body.zai-shell-oled,
+    body.zai-shell-oled [class*="background"],
+    body.zai-shell-oled [class*="bg-"] {
+      background: #000 !important;
+    }
+    body.zai-shell-oled [class*="dark\\:bg-"] {
+      background: #000 !important;
+    }
+
     /* Boton flotante para abrir ajustes de ZaiShell */
     #zai-shell-fab {
       position: fixed;
@@ -319,6 +408,23 @@
         <span>Wake lock</span>
         <button id="zai-btn-wake" class="success">Activar</button>
       </div>
+      <div class="row">
+        <span>Modo OLED</span>
+        <button id="zai-btn-oled">On/Off</button>
+      </div>
+      <div class="row">
+        <span>Buscar en chat</span>
+        <button id="zai-btn-search">Buscar</button>
+      </div>
+      <div class="row">
+        <span>Compartir última respuesta</span>
+        <button id="zai-btn-share">Compartir</button>
+      </div>
+      <div class="row">
+        <span>Ajustar texto</span>
+        <button id="zai-btn-fontminus">A-</button>
+        <button id="zai-btn-fontplus">A+</button>
+      </div>
     `;
 
     document.body.appendChild(fab);
@@ -372,6 +478,30 @@
         console.warn('Wake lock failed', e);
       }
     });
+
+    // OLED toggle
+    document.getElementById('zai-btn-oled').addEventListener('click', () => {
+      document.body.classList.toggle('zai-shell-oled');
+      try {
+        localStorage.setItem('zai-shell-oled', document.body.classList.contains('zai-shell-oled') ? '1' : '0');
+      } catch (e) {}
+    });
+    // Restaurar estado OLED guardado
+    try {
+      if (localStorage.getItem('zai-shell-oled') === '1') {
+        document.body.classList.add('zai-shell-oled');
+      }
+    } catch (e) {}
+
+    // Busqueda en chat
+    document.getElementById('zai-btn-search').addEventListener('click', toggleSearch);
+
+    // Compartir ultima respuesta
+    document.getElementById('zai-btn-share').addEventListener('click', shareLastResponse);
+
+    // Tamaño de fuente
+    document.getElementById('zai-btn-fontminus').addEventListener('click', () => adjustFont(-1));
+    document.getElementById('zai-btn-fontplus').addEventListener('click', () => adjustFont(1));
 
     function updateStats() {
       const m = document.getElementById('zai-stat-msgs');
@@ -433,6 +563,236 @@
   }
 
   // ====================================================================
+  // 8. SEARCH IN CHAT - busca texto en los mensajes del chat actual
+  // ====================================================================
+  let searchBox = null;
+  function toggleSearch() {
+    if (searchBox && searchBox.parentNode) {
+      searchBox.remove();
+      searchBox = null;
+      // Quitar highlights
+      document.querySelectorAll('.zai-shell-highlight').forEach(el => {
+        const parent = el.parentNode;
+        parent.replaceChild(document.createTextNode(el.textContent), el);
+        parent.normalize();
+      });
+      return;
+    }
+    searchBox = document.createElement('div');
+    searchBox.id = 'zai-shell-search';
+    searchBox.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#1a1a1a;padding:8px;z-index:999999;display:flex;gap:6px;align-items:center;font-family:system-ui;';
+    searchBox.innerHTML = `
+      <input type="text" placeholder="Buscar en chat..." style="flex:1;background:#0a0a0a;color:#fff;border:1px solid #444;border-radius:6px;padding:8px 12px;font-size:14px;" />
+      <button id="zai-search-prev" style="background:#3b82f6;color:white;border:none;padding:8px 12px;border-radius:6px;cursor:pointer;">▲</button>
+      <button id="zai-search-next" style="background:#3b82f6;color:white;border:none;padding:8px 12px;border-radius:6px;cursor:pointer;">▼</button>
+      <button id="zai-search-close" style="background:#dc2626;color:white;border:none;padding:8px 12px;border-radius:6px;cursor:pointer;">✕</button>
+      <span id="zai-search-count" style="color:#94a3b8;font-size:12px;min-width:60px;text-align:right;">0/0</span>
+    `;
+    document.body.appendChild(searchBox);
+    const input = searchBox.querySelector('input');
+    const countSpan = searchBox.querySelector('#zai-search-count');
+    let matches = [];
+    let currentIdx = -1;
+
+    function clearHighlights() {
+      document.querySelectorAll('.zai-shell-highlight').forEach(el => {
+        const parent = el.parentNode;
+        parent.replaceChild(document.createTextNode(el.textContent), el);
+        parent.normalize();
+      });
+    }
+
+    function highlight(term) {
+      clearHighlights();
+      if (!term) { matches = []; currentIdx = -1; updateCount(); return; }
+      const msgs = findMessages();
+      const regex = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+      matches = [];
+      for (const msg of msgs) {
+        const walker = document.createTreeWalker(msg, NodeFilter.SHOW_TEXT, null, null);
+        const nodes = [];
+        let node;
+        while ((node = walker.nextNode())) {
+          if (node.textContent && regex.test(node.textContent)) {
+            nodes.push(node);
+          }
+          regex.lastIndex = 0;
+        }
+        for (const n of nodes) {
+          const text = n.textContent;
+          const span = document.createElement('span');
+          span.innerHTML = text.replace(regex, m => `<mark class="zai-shell-highlight" style="background:#fbbf24;color:#000;padding:0 2px;border-radius:2px;">${m}</mark>`);
+          n.parentNode.replaceChild(span, n);
+          matches.push(span);
+        }
+      }
+      currentIdx = matches.length > 0 ? 0 : -1;
+      updateCount();
+      scrollToMatch();
+    }
+
+    function updateCount() {
+      countSpan.textContent = (currentIdx + 1) + '/' + matches.length;
+    }
+
+    function scrollToMatch() {
+      if (currentIdx < 0 || !matches[currentIdx]) return;
+      matches[currentIdx].scrollIntoView({ behavior: 'smooth', block: 'center' });
+      // Resaltar el actual con color distinto
+      matches.forEach((m, i) => {
+        const mark = m.querySelector('mark');
+        if (mark) mark.style.background = i === currentIdx ? '#f97316' : '#fbbf24';
+      });
+      updateCount();
+    }
+
+    input.addEventListener('input', () => highlight(input.value));
+    searchBox.querySelector('#zai-search-prev').addEventListener('click', () => {
+      if (matches.length === 0) return;
+      currentIdx = (currentIdx - 1 + matches.length) % matches.length;
+      scrollToMatch();
+    });
+    searchBox.querySelector('#zai-search-next').addEventListener('click', () => {
+      if (matches.length === 0) return;
+      currentIdx = (currentIdx + 1) % matches.length;
+      scrollToMatch();
+    });
+    searchBox.querySelector('#zai-search-close').addEventListener('click', toggleSearch);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        if (e.shiftKey) searchBox.querySelector('#zai-search-prev').click();
+        else searchBox.querySelector('#zai-search-next').click();
+      } else if (e.key === 'Escape') {
+        toggleSearch();
+      }
+    });
+    setTimeout(() => input.focus(), 100);
+  }
+
+  // ====================================================================
+  // 9. SHARE LAST RESPONSE - comparte la ultima respuesta del asistente
+  // ====================================================================
+  function shareLastResponse() {
+    const msgs = findMessages();
+    if (msgs.length === 0) {
+      alert('No hay respuestas para compartir');
+      return;
+    }
+    // La ultima respuesta es el ultimo mensaje que no es user
+    const userMsgs = findUserMessages();
+    const userSet = new Set(userMsgs);
+    let lastResponse = null;
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (!userSet.has(msgs[i])) {
+        lastResponse = msgs[i];
+        break;
+      }
+    }
+    if (!lastResponse) {
+      alert('No se encontro respuesta del asistente');
+      return;
+    }
+    const text = (lastResponse.innerText || lastResponse.textContent || '').trim();
+    if (!text) {
+      alert('La respuesta esta vacia');
+      return;
+    }
+
+    // Intentar usar Web Share API nativa
+    if (navigator.share) {
+      navigator.share({
+        title: 'Respuesta de Z.ai',
+        text: text,
+      }).catch(e => console.warn('Share failed', e));
+    } else if (window.Capacitor?.Plugins?.Share) {
+      // Fallback al plugin Share si existe
+      window.Capacitor.Plugins.Share.share({ title: 'Respuesta de Z.ai', text }).catch(() => {
+        // Ultimo recurso: copiar al portapapeles
+        navigator.clipboard.writeText(text).then(() => alert('Respuesta copiada al portapapeles'));
+      });
+    } else {
+      // Copiar al portapapeles
+      navigator.clipboard.writeText(text).then(() => alert('Respuesta copiada al portapapeles')).catch(() => {
+        // Fallback ultimo
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        ta.remove();
+        alert('Respuesta copiada al portapapeles');
+      });
+    }
+  }
+
+  // ====================================================================
+  // 10. FONT SIZE ADJUST - ajustar tamano de fuente del chat
+  // ====================================================================
+  let fontScale = 1;
+  function adjustFont(delta) {
+    fontScale = Math.max(0.7, Math.min(1.6, fontScale + delta * 0.1));
+    try { localStorage.setItem('zai-shell-fontscale', String(fontScale)); } catch (e) {}
+    applyFontScale();
+  }
+  function applyFontScale() {
+    let style = document.getElementById('zai-shell-fontscale');
+    if (!style) {
+      style = document.createElement('style');
+      style.id = 'zai-shell-fontscale';
+      document.head.appendChild(style);
+    }
+    style.textContent = `
+      [class*="markdown"], [class*="message-content"] {
+        font-size: ${15 * fontScale}px !important;
+      }
+      [class*="markdown"] code, [class*="markdown"] pre {
+        font-size: ${13 * fontScale}px !important;
+      }
+      [class*="markdown"] h1 { font-size: ${1.8 * fontScale}em !important; }
+      [class*="markdown"] h2 { font-size: ${1.5 * fontScale}em !important; }
+      [class*="markdown"] h3 { font-size: ${1.25 * fontScale}em !important; }
+    `;
+  }
+
+  // ====================================================================
+  // 11. KEYBOARD FIX - forzar atributos de autocorrect en el textarea
+  // ====================================================================
+  function fixKeyboardAttributes() {
+    const textarea = document.querySelector('textarea#chat-input, textarea[placeholder*="Message" i], textarea[placeholder*="Send" i], textarea');
+    if (!textarea) return false;
+    const attrs = {
+      'autocapitalize': 'sentences',
+      'autocorrect': 'on',
+      'spellcheck': 'true',
+      'autocomplete': 'on',
+      'lang': 'es',
+      'enterkeyhint': 'send',
+      'inputmode': 'text',
+    };
+    for (const [k, v] of Object.entries(attrs)) {
+      textarea.setAttribute(k, v);
+    }
+    return true;
+  }
+
+  function startKeyboardFix() {
+    // Re-aplicar periodicamente porque z.ai puede re-crear el textarea
+    const interval = setInterval(() => {
+      fixKeyboardAttributes();
+    }, 3000);
+    // Tambien en focus
+    document.addEventListener('focusin', (e) => {
+      if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') {
+        fixKeyboardAttributes();
+      }
+    }, true);
+    // Aplicar inmediatamente
+    fixKeyboardAttributes();
+    log('Keyboard fix started');
+  }
+
+  // ====================================================================
   // BOOTSTRAP
   // ====================================================================
   function boot() {
@@ -442,6 +802,15 @@
     setupNetworkResilience();
     watchResponseState();
     createFAB();
+    startKeyboardFix();
+    // Restaurar tamano de fuente guardado
+    try {
+      const saved = parseFloat(localStorage.getItem('zai-shell-fontscale') || '1');
+      if (!isNaN(saved) && saved !== 1) {
+        fontScale = saved;
+        applyFontScale();
+      }
+    } catch (e) {}
     log('Z.ai Shell fully loaded');
   }
 
