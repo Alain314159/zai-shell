@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#F0101010"
+    android:padding="12dp"
+    android:clickable="true"
+    android:focusable="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginBottom="8dp">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="⚡ Z.ai"
+            android:textColor="#3b82f6"
+            android:textSize="16sp"
+            android:textStyle="bold" />
+
+        <ImageView
+            android:layout_width="20dp"
+            android:layout_height="20dp"
+            android:src="@drawable/ic_notification"
+            android:contentDescription="Z.ai" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/widget_input"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:minHeight="48dp"
+        android:background="#22000000"
+        android:padding="10dp"
+        android:text="Toca para preguntar a Z.ai..."
+        android:textColorHint="#94a3b8"
+        android:textColor="#94a3b8"
+        android:textSize="14sp"
+        android:gravity="center_vertical"
+        android:singleLine="true"
+        android:ellipsize="end" />
+
+    <Button
+        android:id="@+id/widget_send_button"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:background="#3b82f6"
+        android:text="Enviar a Z.ai"
+        android:textColor="#ffffff"
+        android:textSize="13sp"
+        android:textStyle="bold"
+        android:minHeight="40dp" />
+
+</LinearLayout>

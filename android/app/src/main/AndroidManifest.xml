@@ -63,5 +63,19 @@
                 android:value="Keep AI chat session alive to prevent connection drops and freezing" />
         </service>
 
+        <!-- Widget de pantalla de inicio -->
+        <receiver
+            android:name=".plugin.ZaiWidgetProvider"
+            android:exported="true"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.zai.shell.action.SEND_PROMPT" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/zai_widget_info" />
+        </receiver>
+
     </application>
 </manifest>

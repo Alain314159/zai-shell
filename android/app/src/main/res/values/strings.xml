@@ -10,4 +10,5 @@
     <string name="package_name" translatable="false">com.zai.shell</string>
     <string name="custom_server" translatable="false">false</string>
     <string name="default_asset_path" translatable="false">public</string>
+    <string name="widget_description">Widget de pantalla de inicio para Z.ai Shell</string>
 </resources>
