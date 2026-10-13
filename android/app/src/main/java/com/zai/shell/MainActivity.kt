@@ -14,6 +14,7 @@ import com.getcapacitor.BridgeActivity
 import com.zai.shell.plugin.ZaiForegroundService
 import com.zai.shell.plugin.ZaiCookieBackupPlugin
 import com.zai.shell.plugin.ZaiHistoryPlugin
+import com.zai.shell.plugin.ZaiSseBridgePlugin
 import com.zai.shell.plugin.ZaiShellPlugin
 import com.zai.shell.plugin.ZaiWebChromeClient
 import com.zai.shell.plugin.ZaiWebViewClient
@@ -27,6 +28,7 @@ class MainActivity : BridgeActivity() {
         registerPlugin(ZaiShellPlugin::class.java)
         registerPlugin(ZaiCookieBackupPlugin::class.java)
         registerPlugin(ZaiHistoryPlugin::class.java)
+        registerPlugin(ZaiSseBridgePlugin::class.java)
         super.onCreate(savedInstanceState)
 
         ZaiForegroundService.start(this)

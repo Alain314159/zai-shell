@@ -1124,6 +1124,146 @@
   }
 
   // ====================================================================
+  // 15. NATIVE SSE BRIDGE - intercepta streams del WebView y los enruta
+  // a una conexion SSE nativa en Kotlin que sobrevive al background
+  // ====================================================================
+
+  /**
+   * Patcheamos window.fetch para detectar requests SSE/streaming.
+   * Cuando detectamos una request que parece SSE (Accept: text/event-stream
+   * o URL con /stream o /chat/completion), la desviamos al plugin nativo
+   * ZaiSseBridge que mantiene la conexion en Kotlin.
+   *
+   * Devolvemos al WebView un ReadableStream falso que recibe los eventos
+   * del nativo, asi z.ai no se entera del cambio.
+   */
+  function installSseInterceptor() {
+    if (!window.Capacitor?.Plugins?.ZaiSseBridge) {
+      log('ZaiSseBridge not available, skipping SSE interceptor');
+      return;
+    }
+    if (window.__ZAI_SSE_INTERCEPTED__) return;
+    window.__ZAI_SSE_INTERCEPTED__ = true;
+
+    const SseBridge = window.Capacitor.Plugins.ZaiSseBridge;
+    const originalFetch = window.fetch;
+    let streamCounter = 0;
+
+    // Listener para eventos del nativo
+    const streamCallbacks = new Map();
+    SseBridge.addListener('sse:event', (event) => {
+      const cb = streamCallbacks.get(event.id);
+      if (!cb) return;
+      if (event.type === 'open') {
+        cb.onOpen && cb.onOpen(event.code || 200);
+      } else if (event.type === 'event') {
+        cb.onEvent && cb.onEvent(event.eventType || 'message', event.data || '', event.eventId);
+      } else if (event.type === 'closed') {
+        cb.onClose && cb.onClose();
+        streamCallbacks.delete(event.id);
+      } else if (event.type === 'error') {
+        cb.onError && cb.onError(new Error(event.message || 'SSE error'), event.code);
+        streamCallbacks.delete(event.id);
+      }
+    });
+
+    function isStreamRequest(url, options) {
+      const lowerUrl = (url || '').toLowerCase();
+      const accept = (options?.headers?.Accept || options?.headers?.accept || '').toLowerCase();
+      if (accept.includes('text/event-stream')) return true;
+      if (lowerUrl.includes('/stream')) return true;
+      if (lowerUrl.includes('/chat/completion')) return true;
+      if (lowerUrl.includes('/api/chat') && !lowerUrl.includes('/api/chats/')) return true;
+      if (lowerUrl.includes('/completion')) return true;
+      return false;
+    }
+
+    window.fetch = async function(input, init) {
+      const url = typeof input === 'string' ? input : (input?.url || '');
+      const options = init || {};
+
+      if (!isStreamRequest(url, options)) {
+        return originalFetch.call(this, input, init);
+      }
+
+      log('Intercepting SSE stream:', url.slice(0, 100));
+
+      const headersObj = {};
+      if (options.headers) {
+        if (options.headers instanceof Headers) {
+          options.headers.forEach((v, k) => { headersObj[k] = v; });
+        } else if (Array.isArray(options.headers)) {
+          options.headers.forEach(([k, v]) => { headersObj[k] = v; });
+        } else {
+          Object.assign(headersObj, options.headers);
+        }
+      }
+      if (options.method?.toUpperCase() === 'POST' && !headersObj['Content-Type'] && !headersObj['content-type']) {
+        headersObj['Content-Type'] = 'application/json';
+      }
+
+      const streamId = 'sse-' + (++streamCounter) + '-' + Date.now();
+
+      let controllerRef = null;
+      const readable = new ReadableStream({
+        start(controller) { controllerRef = controller; },
+        cancel() {
+          SseBridge.stopStream({ id: streamId });
+          streamCallbacks.delete(streamId);
+        }
+      });
+
+      const encoder = new TextEncoder();
+
+      streamCallbacks.set(streamId, {
+        onOpen: (code) => { log('SSE stream opened:', streamId, 'code', code); },
+        onEvent: (eventType, data, eventId) => {
+          if (!controllerRef) return;
+          let chunk = '';
+          if (eventId) chunk += 'id: ' + eventId + '\n';
+          if (eventType && eventType !== 'message') chunk += 'event: ' + eventType + '\n';
+          const dataLines = data.split('\n');
+          for (const line of dataLines) chunk += 'data: ' + line + '\n';
+          chunk += '\n';
+          try { controllerRef.enqueue(encoder.encode(chunk)); } catch (e) {}
+        },
+        onClose: () => {
+          if (controllerRef) { try { controllerRef.close(); } catch (e) {} }
+        },
+        onError: (err, code) => {
+          log('SSE stream error:', streamId, err.message);
+          if (controllerRef) { try { controllerRef.error(err); } catch (e) {} }
+        }
+      });
+
+      try {
+        await SseBridge.startStream({
+          id: streamId,
+          url: url,
+          method: options.method || 'GET',
+          headers: headersObj,
+          body: typeof options.body === 'string' ? options.body : null
+        });
+      } catch (e) {
+        log('Failed to start native SSE, fallback:', e.message);
+        return originalFetch.call(this, input, init);
+      }
+
+      return new Response(readable, {
+        status: 200,
+        statusText: 'OK',
+        headers: {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive'
+        }
+      });
+    };
+
+    log('SSE interceptor installed (fetch patched)');
+  }
+
+  // ====================================================================
   // SESSION BACKUP - auto-login persistente entre reinstalaciones
   // ====================================================================
   async function startSessionBackup() {
@@ -1196,6 +1336,7 @@
     createFAB();
     startKeyboardFix();
     startSessionBackup();
+    installSseInterceptor();
     // Restaurar tamano de fuente guardado
     try {
       const saved = parseFloat(localStorage.getItem('zai-shell-fontscale') || '1');
