@@ -72,14 +72,16 @@ class ZaiHistoryPlugin : Plugin() {
                 for (i in 0 until existing.length()) {
                     newArr.put(existing.get(i))
                 }
-                // Trimmear a MAX_CONVERSATIONS
+                // Trimmear a MAX_CONVERSATIONS - crear nuevo JSONArray
                 val trimmed = JSONArray()
                 val end = Math.min(newArr.length(), MAX_CONVERSATIONS)
                 for (i in 0 until end) {
                     trimmed.put(newArr.get(i))
                 }
-                existing.clear()
-                for (i in 0 until trimmed.length()) existing.put(trimmed.get(i))
+                // Reemplazar existing con trimmed (no se puede clear, hay que recrear)
+                prefs.edit().putString(KEY_CONVERSATIONS, trimmed.toString()).apply()
+                call.resolve(JSObject().put("ok", true).put("id", id))
+                return
             }
 
             prefs.edit().putString(KEY_CONVERSATIONS, existing.toString()).apply()
