@@ -425,6 +425,14 @@
         <button id="zai-btn-fontminus">A-</button>
         <button id="zai-btn-fontplus">A+</button>
       </div>
+      <div class="row">
+        <span>Historial offline</span>
+        <button id="zai-btn-history">Ver</button>
+      </div>
+      <div class="row">
+        <span>Guardar chat actual</span>
+        <button id="zai-btn-save">Guardar</button>
+      </div>
     `;
 
     document.body.appendChild(fab);
@@ -503,6 +511,10 @@
     document.getElementById('zai-btn-fontminus').addEventListener('click', () => adjustFont(-1));
     document.getElementById('zai-btn-fontplus').addEventListener('click', () => adjustFont(1));
 
+    // Historial offline
+    document.getElementById('zai-btn-history').addEventListener('click', showHistory);
+    document.getElementById('zai-btn-save').addEventListener('click', saveCurrentConversation);
+
     function updateStats() {
       const m = document.getElementById('zai-stat-msgs');
       const h = document.getElementById('zai-stat-hidden');
@@ -560,6 +572,8 @@
           if (document.hidden) {
             sendBackgroundNotification();
           }
+          // Auto-guardar conversacion en historial offline
+          autoSaveConversation();
         } catch (e) {}
       }
       lastResponding = now;
@@ -846,7 +860,271 @@
   }
 
   // ====================================================================
-  // 12. SESSION BACKUP - auto-login persistente entre reinstalaciones
+  // 13. OFFLINE HISTORY - guardado y visualizacion de conversaciones
+  // ====================================================================
+
+  /**
+   * Extrae todos los mensajes del chat actual en formato estructurado
+   */
+  function extractConversationMessages() {
+    const userMsgs = findUserMessages();
+    const userSet = new Set(userMsgs);
+    const allMsgs = findMessages();
+    // Ordenar por posicion en el DOM
+    const sorted = allMsgs.slice().sort((a, b) => {
+      if (a === b) return 0;
+      const pos = a.compareDocumentPosition(b);
+      return (pos & Node.DOCUMENT_POSITION_FOLLOWING) ? -1 : 1;
+    });
+    const messages = [];
+    for (const el of sorted) {
+      const isUser = userSet.has(el);
+      const text = (el.innerText || el.textContent || '').trim();
+      if (!text || text.length < 2) continue;
+      messages.push({
+        role: isUser ? 'user' : 'assistant',
+        content: text,
+        timestamp: Date.now(),
+      });
+    }
+    return messages;
+  }
+
+  /**
+   * Genera un ID unico para la conversacion basado en la URL
+   */
+  function getConversationId() {
+    const m = location.pathname.match(/\/chat\/(?:s\/)?([a-zA-Z0-9_-]{8,})/);
+    return m ? m[1] : 'default-' + Date.now();
+  }
+
+  /**
+   * Genera un titulo a partir del primer mensaje del usuario
+   */
+  function getConversationTitle(messages) {
+    const firstUser = messages.find(m => m.role === 'user');
+    if (!firstUser) return 'Conversacion ' + new Date().toLocaleString();
+    const text = firstUser.content.trim();
+    if (text.length <= 50) return text;
+    return text.substring(0, 47) + '...';
+  }
+
+  async function saveCurrentConversation() {
+    if (!window.Capacitor?.Plugins?.ZaiHistory) {
+      alert('Historial no disponible');
+      return;
+    }
+    const messages = extractConversationMessages();
+    if (messages.length === 0) {
+      alert('No hay mensajes para guardar');
+      return;
+    }
+    try {
+      await window.Capacitor.Plugins.ZaiHistory.saveConversation({
+        id: getConversationId(),
+        title: getConversationTitle(messages),
+        messages: messages,
+        url: location.href,
+        timestamp: Date.now(),
+      });
+      toast('Chat guardado en historial (' + messages.length + ' mensajes)');
+    } catch (e) {
+      alert('Error guardando: ' + e.message);
+    }
+  }
+
+  async function showHistory() {
+    if (!window.Capacitor?.Plugins?.ZaiHistory) {
+      alert('Historial no disponible');
+      return;
+    }
+    let historyPanel = document.getElementById('zai-shell-history-panel');
+    if (historyPanel) {
+      historyPanel.remove();
+      return;
+    }
+    historyPanel = document.createElement('div');
+    historyPanel.id = 'zai-shell-history-panel';
+    historyPanel.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.95);z-index:999999;overflow-y:auto;padding:16px;font-family:system-ui;color:#fff;';
+    historyPanel.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <h2 style="margin:0;color:#3b82f6;">📋 Historial Offline</h2>
+        <button id="zai-history-close" style="background:#dc2626;color:white;border:none;padding:8px 12px;border-radius:6px;cursor:pointer;">✕ Cerrar</button>
+      </div>
+      <div style="display:flex;gap:6px;margin-bottom:12px;">
+        <input id="zai-history-search" type="text" placeholder="Buscar en historial..." style="flex:1;background:#1a1a1a;color:#fff;border:1px solid #444;border-radius:6px;padding:8px;font-size:14px;" />
+        <button id="zai-history-search-btn" style="background:#3b82f6;color:white;border:none;padding:8px 12px;border-radius:6px;cursor:pointer;">Buscar</button>
+      </div>
+      <div id="zai-history-list" style="display:flex;flex-direction:column;gap:8px;">Cargando...</div>
+    `;
+    document.body.appendChild(historyPanel);
+
+    historyPanel.querySelector('#zai-history-close').addEventListener('click', () => historyPanel.remove());
+    historyPanel.querySelector('#zai-history-search-btn').addEventListener('click', () => searchHistoryHistory(historyPanel));
+    historyPanel.querySelector('#zai-history-search').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') searchHistoryHistory(historyPanel);
+    });
+
+    await loadHistoryList(historyPanel);
+  }
+
+  async function loadHistoryList(panel) {
+    const list = panel.querySelector('#zai-history-list');
+    list.innerHTML = 'Cargando...';
+    try {
+      const result = await window.Capacitor.Plugins.ZaiHistory.listConversations();
+      const convs = result.conversations || [];
+      if (convs.length === 0) {
+        list.innerHTML = '<div style="text-align:center;color:#666;padding:32px;">No hay conversaciones guardadas.<br><br>Usa "Guardar chat actual" para añadir una.</div>';
+        return;
+      }
+      list.innerHTML = '';
+      for (const c of convs) {
+        const item = document.createElement('div');
+        item.style.cssText = 'background:#1a1a1a;padding:12px;border-radius:8px;cursor:pointer;border:1px solid #333;';
+        const date = new Date(c.timestamp).toLocaleString();
+        item.innerHTML = `
+          <div style="font-weight:bold;color:#fff;margin-bottom:4px;">${escapeHtml(c.title)}</div>
+          <div style="color:#94a3b8;font-size:12px;">${date} · ${c.messageCount} mensajes</div>
+          <div style="display:flex;gap:6px;margin-top:8px;">
+            <button class="zai-history-view" data-id="${c.id}" style="background:#3b82f6;color:white;border:none;padding:4px 10px;border-radius:4px;cursor:pointer;font-size:11px;">Ver</button>
+            <button class="zai-history-del" data-id="${c.id}" style="background:#dc2626;color:white;border:none;padding:4px 10px;border-radius:4px;cursor:pointer;font-size:11px;">Borrar</button>
+          </div>
+        `;
+        list.appendChild(item);
+      }
+      // Handlers
+      list.querySelectorAll('.zai-history-view').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const id = btn.dataset.id;
+          await viewConversation(id, panel);
+        });
+      });
+      list.querySelectorAll('.zai-history-del').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const id = btn.dataset.id;
+          if (confirm('¿Borrar esta conversacion?')) {
+            await window.Capacitor.Plugins.ZaiHistory.deleteConversation({ id });
+            await loadHistoryList(panel);
+          }
+        });
+      });
+    } catch (e) {
+      list.innerHTML = '<div style="color:#dc2626;">Error: ' + escapeHtml(e.message) + '</div>';
+    }
+  }
+
+  async function viewConversation(id, panel) {
+    const list = panel.querySelector('#zai-history-list');
+    list.innerHTML = '<button id="zai-history-back" style="background:#444;color:white;border:none;padding:6px 12px;border-radius:6px;cursor:pointer;margin-bottom:12px;">← Volver</button><div id="zai-conv-content">Cargando...</div>';
+    list.querySelector('#zai-history-back').addEventListener('click', () => loadHistoryList(panel));
+    try {
+      const result = await window.Capacitor.Plugins.ZaiHistory.getConversation({ id });
+      const conv = result.conversation;
+      const content = list.querySelector('#zai-conv-content');
+      content.innerHTML = '';
+      const header = document.createElement('div');
+      header.style.cssText = 'color:#3b82f6;font-weight:bold;margin-bottom:12px;font-size:16px;';
+      header.textContent = conv.title;
+      content.appendChild(header);
+      const msgs = conv.messages || [];
+      for (const m of msgs) {
+        const div = document.createElement('div');
+        div.style.cssText = 'background:' + (m.role === 'user' ? '#1e3a5f' : '#1a1a1a') + ';padding:10px;border-radius:8px;margin-bottom:8px;border-left:3px solid ' + (m.role === 'user' ? '#3b82f6' : '#16a34a') + ';';
+        const role = document.createElement('div');
+        role.style.cssText = 'font-size:11px;color:#94a3b8;margin-bottom:4px;text-transform:uppercase;';
+        role.textContent = m.role === 'user' ? '👤 Tú' : '⚡ Z.ai';
+        const text = document.createElement('div');
+        text.style.cssText = 'white-space:pre-wrap;word-wrap:break-word;color:#fff;font-size:14px;line-height:1.5;';
+        text.textContent = m.content;
+        div.appendChild(role);
+        div.appendChild(text);
+        content.appendChild(div);
+      }
+    } catch (e) {
+      list.innerHTML = '<div style="color:#dc2626;">Error: ' + escapeHtml(e.message) + '</div>';
+    }
+  }
+
+  async function searchHistoryHistory(panel) {
+    const query = panel.querySelector('#zai-history-search').value.trim();
+    if (!query) {
+      await loadHistoryList(panel);
+      return;
+    }
+    const list = panel.querySelector('#zai-history-list');
+    list.innerHTML = 'Buscando...';
+    try {
+      const result = await window.Capacitor.Plugins.ZaiHistory.searchHistory({ query });
+      const results = result.results || [];
+      if (results.length === 0) {
+        list.innerHTML = '<div style="text-align:center;color:#666;padding:32px;">No se encontraron resultados para "' + escapeHtml(query) + '"</div>';
+        return;
+      }
+      list.innerHTML = '<div style="color:#94a3b8;margin-bottom:8px;">' + results.length + ' resultado(s) para "' + escapeHtml(query) + '"</div>';
+      for (const r of results) {
+        const item = document.createElement('div');
+        item.style.cssText = 'background:#1a1a1a;padding:10px;border-radius:6px;margin-bottom:6px;border-left:3px solid #fbbf24;';
+        item.innerHTML = `
+          <div style="color:#94a3b8;font-size:11px;margin-bottom:4px;">${escapeHtml(r.conversationTitle)} · ${r.role}</div>
+          <div style="color:#fff;font-size:13px;line-height:1.4;">${escapeHtml(r.snippet)}</div>
+        `;
+        list.appendChild(item);
+      }
+    } catch (e) {
+      list.innerHTML = '<div style="color:#dc2626;">Error: ' + escapeHtml(e.message) + '</div>';
+    }
+  }
+
+  function escapeHtml(s) {
+    if (!s) return '';
+    return String(s).replace(/[&<>"']/g, c => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[c]));
+  }
+
+  function toast(msg) {
+    let el = document.getElementById('zai-shell-toast');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'zai-shell-toast';
+      el.style.cssText = 'position:fixed;bottom:140px;left:50%;transform:translateX(-50%);background:#1a1a1a;color:#fff;padding:10px 16px;border-radius:8px;font-family:system-ui;font-size:13px;z-index:999999;box-shadow:0 4px 12px rgba(0,0,0,.5);max-width:80vw;';
+      document.body.appendChild(el);
+    }
+    el.textContent = msg;
+    el.style.display = 'block';
+    clearTimeout(el._timer);
+    el._timer = setTimeout(() => { el.style.display = 'none'; }, 3000);
+  }
+
+  // ====================================================================
+  // 14. AUTO-SAVE CONVERSATION - guarda el chat automaticamente cuando
+  // el modelo termina de responder
+  // ====================================================================
+  let lastAutoSave = 0;
+  async function autoSaveConversation() {
+    // Solo guardar si ha pasado mas de 30s desde el ultimo guardado
+    if (Date.now() - lastAutoSave < 30000) return;
+    if (!window.Capacitor?.Plugins?.ZaiHistory) return;
+    const messages = extractConversationMessages();
+    if (messages.length < 2) return;
+    try {
+      await window.Capacitor.Plugins.ZaiHistory.saveConversation({
+        id: getConversationId(),
+        title: getConversationTitle(messages),
+        messages: messages,
+        url: location.href,
+        timestamp: Date.now(),
+      });
+      lastAutoSave = Date.now();
+      log('Auto-saved conversation (' + messages.length + ' msgs)');
+    } catch (e) {}
+  }
+
+  // ====================================================================
+  // SESSION BACKUP - auto-login persistente entre reinstalaciones
   // ====================================================================
   async function startSessionBackup() {
     if (!window.Capacitor?.Plugins?.ZaiCookieBackup) return;

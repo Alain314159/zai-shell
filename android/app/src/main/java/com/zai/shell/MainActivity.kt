@@ -12,6 +12,7 @@ import android.webkit.DownloadListener
 import com.getcapacitor.BridgeActivity
 import com.zai.shell.plugin.ZaiForegroundService
 import com.zai.shell.plugin.ZaiCookieBackupPlugin
+import com.zai.shell.plugin.ZaiHistoryPlugin
 import com.zai.shell.plugin.ZaiShellPlugin
 import com.zai.shell.plugin.ZaiWebChromeClient
 import com.zai.shell.plugin.ZaiWebViewClient
@@ -23,6 +24,7 @@ class MainActivity : BridgeActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         registerPlugin(ZaiShellPlugin::class.java)
         registerPlugin(ZaiCookieBackupPlugin::class.java)
+        registerPlugin(ZaiHistoryPlugin::class.java)
         super.onCreate(savedInstanceState)
 
         ZaiForegroundService.start(this)
