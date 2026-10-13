@@ -25,6 +25,85 @@ class ZaiWebViewClient(private val bridge: Bridge) : WebViewClient() {
             "z.ai", "chat.z.ai", "bigmodel.cn", "zhipuai.cn", "zhipuai.cn",
             "localhost", "127.0.0.1"
         )
+        // Patrones de URLs bloqueadas (telemetry/analytics/tracking)
+        // Reduces bandwidth + improves privacy
+        private val BLOCKED_PATTERNS = listOf(
+            "google-analytics.com",
+            "googletagmanager.com",
+            "doubleclick.net",
+            "facebook.net",
+            "connect.facebook.net",
+            "segment.io",
+            "segment.com",
+            "amplitude.com",
+            "mixpanel.com",
+            "hotjar.com",
+            "sentry.io",
+            "posthog.com",
+            "fullstory.com",
+            "logrocket.com",
+            "clarity.ms",
+            "bat.bing.com",
+            "scorecardresearch.com",
+            "quantserve.com",
+            "taboola.com",
+            "outbrain.com",
+            "criteo.com",
+            "adnxs.com",
+            "pubmatic.com",
+            "rubiconproject.com",
+            "openx.net",
+            "casalemedia.com",
+            "matomo.cloud",
+            "matomo.org",
+            "tagmanager.google.com",
+            "adservice.google.com",
+            "googleadservices.com",
+            "adsystem.com",
+            "amazon-adsystem.com",
+            "cloudflareinsights.com",
+            "cloudflarebeacon.com",
+            "newrelic.com",
+            "nr-data.net",
+            "rumcdn.com",
+            "rumstatic.com",
+            "cdn.mxpnl.com",
+            "cdn.segment.com",
+            "snap.licdn.com",
+            "analytics.tiktok.com",
+            "analytics.twitter.com",
+            "ads.linkedin.com",
+            "ads.twitter.com",
+            "ads.facebook.com",
+            "edge.adsymptotic.com",
+            "heapanalytics.com",
+            "kissmetrics.com",
+            "wootric.com",
+            "app.pendo.io",
+            "dc.ads.linkedin.com"
+        )
+    }
+
+    /**
+     * Intercepta TODAS las requests (XHR, fetch, imagenes, scripts, etc.)
+     * Bloquea telemetry/analytics para mejorar performance y privacidad
+     */
+    override fun shouldInterceptRequest(view: WebView?, url: String?): android.webkit.WebResourceResponse? {
+        url ?: return super.shouldInterceptRequest(view, url)
+        val lowerUrl = url.lowercase()
+        for (pattern in BLOCKED_PATTERNS) {
+            if (lowerUrl.contains(pattern)) {
+                Log.i(TAG, "Bloqueado (telemetry): $url")
+                return android.webkit.WebResourceResponse(
+                    "text/plain",
+                    "utf-8",
+                    java.io.ByteArrayInputStream(ByteArray(0))
+                ).apply {
+                    setStatusCodeAndReasonPhrase(204, "No Content (blocked by ZaiShell)")
+                }
+            }
+        }
+        return super.shouldInterceptRequest(view, url)
     }
 
     override fun onPageFinished(view: WebView?, url: String?) {
