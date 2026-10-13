@@ -11,6 +11,8 @@ import com.getcapacitor.annotation.CapacitorPlugin
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.sse.EventSource
 import okhttp3.sse.EventSourceListener
 import okhttp3.sse.EventSources
@@ -86,10 +88,9 @@ class ZaiSseBridgePlugin : Plugin() {
 
             when (method.uppercase()) {
                 "POST" -> {
-                    val mediaType = okhttp3.MediaType.parse(
-                        headers.optString("Content-Type", "application/json")
-                    )
-                    reqBuilder.post(okhttp3.RequestBody.create(mediaType, body ?: ""))
+                    val mediaType = headers.optString("Content-Type", "application/json").toMediaTypeOrNull()
+                    val reqBody = (body ?: "").toRequestBody(mediaType)
+                    reqBuilder.post(reqBody)
                 }
                 "GET" -> { /* default */ }
                 else -> reqBuilder.method(method, null)
@@ -133,13 +134,14 @@ class ZaiSseBridgePlugin : Plugin() {
                 }
 
                 override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
-                    Log.e(TAG, "SSE failed: $streamId - ${t?.message} code=${response?.code()}")
+                    val respCode = try { response?.code ?: 0 } catch (e: Exception) { 0 }
+                    Log.e(TAG, "SSE failed: $streamId - ${t?.message} code=$respCode")
                     mainHandler.post {
                         val payload = JSObject()
                         payload.put("id", streamId)
                         payload.put("type", "error")
                         payload.put("message", t?.message ?: "unknown error")
-                        payload.put("code", response?.code() ?: 0)
+                        payload.put("code", respCode)
                         notifyListeners("sse:event", payload)
                     }
                     activeStreams.remove(streamId)
