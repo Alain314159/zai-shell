@@ -54,6 +54,11 @@ class ZaiSseBridgePlugin : Plugin() {
                 .writeTimeout(30, TimeUnit.SECONDS)
                 .pingInterval(15, TimeUnit.SECONDS)
                 .retryOnConnectionFailure(true)
+                // GA6: 50MB disk cache for images/requests
+                .cache(okhttp3.Cache(
+                    java.io.File(context.cacheDir, "okhttp-cache"),
+                    50L * 1024 * 1024 // 50 MB
+                ))
                 .build().also { client = it }
         }
     }

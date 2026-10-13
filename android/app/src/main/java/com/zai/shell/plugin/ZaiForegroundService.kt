@@ -12,6 +12,10 @@ import android.os.IBinder
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * ForegroundService - mantiene la app viva en background
@@ -193,14 +197,14 @@ class ZaiForegroundService : Service() {
             }
         } else if (!active && streamingActive) {
             streamingActive = false
-            // Release after 30s grace period (in case another message comes)
-            Thread {
-                Thread.sleep(30000)
+            // GA7: use coroutine instead of Thread for cleaner cancellation
+            CoroutineScope(Dispatchers.IO).launch {
+                delay(30000)
                 if (!streamingActive && wakeLock?.isHeld == true) {
                     try { wakeLock?.release() } catch (e: Exception) {}
                     Log.i(TAG, "Wake lock released after grace period")
                 }
-            }.start()
+            }
         }
     }
 

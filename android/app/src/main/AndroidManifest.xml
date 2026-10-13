@@ -30,6 +30,7 @@
         android:maxSdkVersion="32" />
 
     <application
+        android:name=".ZaiApplication"
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="false"
