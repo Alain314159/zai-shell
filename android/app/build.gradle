@@ -85,10 +85,10 @@ android {
 }
 
 // GA4: R8 full mode - better optimization than ProGuard compatibility mode
-// Reduces APK size 30-40% and improves startup time
 androidComponents {
     onVariants(selector().withBuildType('release')) { variant ->
-        variant.enableR8.fullMode = true
+        // R8 full mode via project property
+        project.ext.set("android.enableR8.fullMode", true)
     }
 }
 
