@@ -87,9 +87,16 @@ class ZaiWebViewClient(private val bridge: Bridge) : WebViewClient() {
     /**
      * Intercepta TODAS las requests (XHR, fetch, imagenes, scripts, etc.)
      * Bloquea telemetry/analytics para mejorar performance y privacidad
+     *
+     * Nota: usamos la sobrecarga con WebResourceRequest (API 21+) en vez de String
+     * para evitar ambiguedad de overload resolution en Kotlin
      */
-    override fun shouldInterceptRequest(view: WebView?, url: String?): android.webkit.WebResourceResponse? {
-        url ?: return super.shouldInterceptRequest(view, url)
+    override fun shouldInterceptRequest(
+        view: WebView?,
+        request: android.webkit.WebResourceRequest?
+    ): android.webkit.WebResourceResponse? {
+        request ?: return super.shouldInterceptRequest(view, request)
+        val url = request.url?.toString() ?: return super.shouldInterceptRequest(view, request)
         val lowerUrl = url.lowercase()
         for (pattern in BLOCKED_PATTERNS) {
             if (lowerUrl.contains(pattern)) {
@@ -103,7 +110,7 @@ class ZaiWebViewClient(private val bridge: Bridge) : WebViewClient() {
                 }
             }
         }
-        return super.shouldInterceptRequest(view, url)
+        return super.shouldInterceptRequest(view, request)
     }
 
     override fun onPageFinished(view: WebView?, url: String?) {
