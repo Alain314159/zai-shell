@@ -19,6 +19,9 @@
     CLEANUP_INTERVAL_MS: 60000,
     KEEPALIVE_INTERVAL_MS: 30000,
     DEBUG: false,
+    // GA9: Telemetry upload interval (24h)
+    TELEMETRY_INTERVAL_MS: 24 * 60 * 60 * 1000,
+    TELEMETRY_KEY: 'zai-shell-telemetry',
   };
 
   // LOW #27: use rest params instead of arguments
@@ -624,13 +627,13 @@
   }
 
   // ====================================================================
-  // 6. NETWORK RESILIENCE - reconectar automaticamente
+  // 6. NETWORK RESILIENCE - reconectar + GA10 modo offline
   // ====================================================================
   function setupNetworkResilience() {
     let lastOnline = navigator.onLine;
     window.addEventListener('online', () => {
       log('Network online - refreshing');
-      // Esperar 2s y recargar si la pagina esta stale
+      hideOfflineBanner();
       setTimeout(() => {
         if (document.visibilityState === 'visible') {
           location.reload();
@@ -639,7 +642,30 @@
     });
     window.addEventListener('offline', () => {
       log('Network offline');
+      showOfflineBanner();
     });
+    // GA10: Check on load
+    if (!navigator.onLine) {
+      setTimeout(() => showOfflineBanner(), 1000);
+    }
+  }
+
+  // GA10: Offline banner
+  function showOfflineBanner() {
+    if (document.getElementById('zai-shell-offline-banner')) return;
+    const banner = document.createElement('div');
+    banner.id = 'zai-shell-offline-banner';
+    banner.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#dc2626;color:white;padding:8px;text-align:center;font-family:system-ui;font-size:13px;z-index:999999;box-shadow:0 2px 8px rgba(0,0,0,.5);';
+    banner.innerHTML = '📡 Sin conexión - Modo offline. <button id="zai-offline-history" style="background:white;color:#dc2626;border:none;padding:4px 10px;border-radius:4px;cursor:pointer;margin-left:8px;font-size:11px;">Ver historial</button>';
+    document.body.appendChild(banner);
+    document.getElementById('zai-offline-history')?.addEventListener('click', () => {
+      if (typeof showHistory === 'function') showHistory();
+    });
+  }
+
+  function hideOfflineBanner() {
+    const banner = document.getElementById('zai-shell-offline-banner');
+    if (banner) banner.remove();
   }
 
   // ====================================================================
@@ -1839,6 +1865,61 @@
     iframeObserver.observe(document.body, { childList: true, subtree: true });
     log('Fullscreen blocker installed (throttled)');
   }
+
+  // ====================================================================
+  // GA9: TELEMETRY - stats anónimas, se suben a GitHub Gist diario
+  // ====================================================================
+  function loadTelemetry() {
+    try {
+      const raw = localStorage.getItem(CONFIG.TELEMETRY_KEY);
+      if (raw) return JSON.parse(raw);
+    } catch (e) {}
+    return {
+      appVersion: '1.0.0',
+      sessionStart: Date.now(),
+      messagesSent: 0,
+      responsesReceived: 0,
+      appOpens: 0,
+      totalUsageMs: 0,
+      errors: 0,
+      lastUpload: 0,
+    };
+  }
+
+  function saveTelemetry(t) {
+    try { localStorage.setItem(CONFIG.TELEMETRY_KEY, JSON.stringify(t)); } catch (e) {}
+  }
+
+  let telemetry = loadTelemetry();
+  telemetry.appOpens++;
+  saveTelemetry(telemetry);
+
+  function recordMessageSent() {
+    telemetry.messagesSent++;
+    saveTelemetry(telemetry);
+  }
+
+  function recordResponseReceived() {
+    telemetry.responsesReceived++;
+    saveTelemetry(telemetry);
+  }
+
+  function recordError() {
+    telemetry.errors++;
+    saveTelemetry(telemetry);
+  }
+
+  // Upload telemetry every 24h
+  setInterval(() => {
+    if (document.hidden) return;
+    if (Date.now() - telemetry.lastUpload < CONFIG.TELEMETRY_INTERVAL_MS) return;
+    // In a real implementation, this would POST to a GitHub Gist
+    // For now, just log and mark as uploaded
+    log('Telemetry ready to upload:', telemetry);
+    telemetry.lastUpload = Date.now();
+    telemetry.totalUsageMs += Date.now() - telemetry.sessionStart;
+    saveTelemetry(telemetry);
+  }, 60 * 60 * 1000); // Check every hour
 
   // ====================================================================
   // BOOTSTRAP
