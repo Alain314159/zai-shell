@@ -210,7 +210,8 @@ class MainActivity : BridgeActivity() {
 
             val settings = wv.settings
             settings.javaScriptCanOpenWindowsAutomatically = false
-            settings.setSupportMultipleWindows(false)
+            // OAuth fix: must be true so onCreateWindow fires for window.open()
+            settings.setSupportMultipleWindows(true)
 
             Log.i(TAG, "Custom WebViewClient + WebChromeClient + DownloadListener hooked")
         } catch (e: Exception) {

@@ -1922,6 +1922,42 @@
   }, 60 * 60 * 1000); // Check every hour
 
   // ====================================================================
+  // 20. OAUTH FIX - window.open() se carga en el mismo WebView
+  // Sin esto, Google/GitHub login abre Chrome y las cookies se pierden
+  // ====================================================================
+  function patchWindowOpen() {
+    if (window.__ZAI_OAUTH_PATCHED__) return;
+    window.__ZAI_OAUTH_PATCHED__ = true;
+
+    const originalOpen = window.open;
+    window.open = function(url, target, features) {
+      if (!url) return null;
+      // Si la URL es http/https, cargarla en el mismo WebView
+      // Esto hace que OAuth (Google, GitHub, etc.) funcione dentro de la app
+      if (url.startsWith('http://') || url.startsWith('https://')) {
+        log('window.open redirected to same tab:', url.slice(0, 100));
+        location.href = url;
+        return null;
+      }
+      // Para otros schemes (mailto:, tel:, etc.) dejar el comportamiento original
+      return originalOpen.call(window, url, target, features);
+    };
+
+    // Tambien interceptar clicks en links con target="_blank"
+    document.addEventListener('click', (e) => {
+      const link = e.target.closest('a[target="_blank"]');
+      if (link && link.href) {
+        e.preventDefault();
+        e.stopPropagation();
+        log('target=_blank link redirected to same tab:', link.href.slice(0, 100));
+        location.href = link.href;
+      }
+    }, true);
+
+    log('OAuth window.open patch installed');
+  }
+
+  // ====================================================================
   // BOOTSTRAP
   // ====================================================================
   function boot() {
@@ -1937,6 +1973,7 @@
     setupPullToRefresh();
     setupOutgoingPersistence();
     setupFullscreenBlocker();
+    patchWindowOpen();
     // Restaurar tamano de fuente guardado
     try {
       const saved = parseFloat(localStorage.getItem('zai-shell-fontscale') || '1');

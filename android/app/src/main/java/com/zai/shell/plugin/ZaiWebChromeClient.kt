@@ -22,21 +22,63 @@ class ZaiWebChromeClient(private val bridge: Bridge) : WebChromeClient() {
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
 
     /**
-     * Bloquea la creacion de nuevas ventanas.
+     * Maneja popups (window.open, target=_blank).
+     *
+     * En vez de bloquear, creamos un WebView temporal que captura la URL
+     * y la carga en el WebView principal. Esto es critico para OAuth:
+     * Google/GitHub login usa window.open() que debe quedarse en la app.
      */
     override fun onCreateWindow(
         view: WebView?, isDialog: Boolean, isUserGesture: Boolean, resultMsg: android.os.Message?
     ): Boolean {
-        Log.i(TAG, "Bloqueado onCreateWindow (dialog=$isDialog, userGesture=$isUserGesture)")
-        view?.context?.let { ctx ->
-            val hitTest = view.hitTestResult
-            val url = hitTest?.extra
-            if (url != null && url.startsWith("http")) {
-                Log.i(TAG, "Redirigiendo URL al mismo WebView: $url")
-                view.loadUrl(url)
+        if (view == null || resultMsg == null) return false
+
+        Log.i(TAG, "onCreateWindow (dialog=$isDialog, userGesture=$isUserGesture)")
+
+        // Primero intentar con hitTestResult (funciona para clicks en links)
+        val hitTest = view.hitTestResult
+        val hitUrl = hitTest?.extra
+        if (hitUrl != null && (hitUrl.startsWith("http://") || hitUrl.startsWith("https://"))) {
+            Log.i(TAG, "Redirecting popup URL to main WebView: $hitUrl")
+            view.loadUrl(hitUrl)
+            return false
+        }
+
+        // Si hitTestResult no tiene URL (window.open from JS), crear WebView temporal
+        // que capture la URL y la redirige al WebView principal
+        val popupWebView = WebView(view.context)
+        popupWebView.settings.javaScriptEnabled = true
+        popupWebView.settings.domStorageEnabled = true
+
+        popupWebView.webViewClient = object : android.webkit.WebViewClient() {
+            override fun shouldOverrideUrlLoading(popupView: WebView?, url: String?): Boolean {
+                if (url != null && (url.startsWith("http://") || url.startsWith("https://"))) {
+                    Log.i(TAG, "Popup URL captured, loading in main WebView: ${url.take(100)}")
+                    // Cargar en el WebView principal (no en el popup)
+                    view.loadUrl(url)
+                    // Destruir el popup
+                    popupView?.destroy()
+                    return true
+                }
+                return false
+            }
+
+            override fun onPageFinished(popupView: WebView?, url: String?) {
+                super.onPageFinished(popupView, url)
+                // Si el popup cargo una pagina (no fue interceptada), cargarla en el main
+                if (url != null && (url.startsWith("http://") || url.startsWith("https://"))) {
+                    Log.i(TAG, "Popup page loaded, redirecting to main: ${url?.take(100)}")
+                    view.loadUrl(url)
+                    popupView?.destroy()
+                }
             }
         }
-        return false
+
+        val transport = resultMsg.obj as android.webkit.WebView.WebViewTransport
+        transport.webView = popupWebView
+        resultMsg.sendToTarget()
+
+        return true
     }
 
     override fun onCloseWindow(window: WebView?) {
